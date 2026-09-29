@@ -36,6 +36,7 @@ def create_drift_followup_prompt(
     followup_query: str,
     entities: list,
     relations: list,
+    claims: list,
     text_units: list,
     prior_evidence: list,
 ) -> str:
@@ -50,6 +51,14 @@ def create_drift_followup_prompt(
     text_text = "\n".join(
         f"- [{item.get('id')}] {item.get('text', '')}"
         for item in text_units
+    ) or "- none"
+    claim_text = "\n".join(
+        (
+            f"- [{item.get('id')}] status={item.get('status')} "
+            f"{item.get('subject_id')} -> {item.get('object_id')}: "
+            f"{item.get('description', '')}"
+        )
+        for item in claims
     ) or "- none"
     prior_text = "\n".join(
         f"- {item.get('question')}: {item.get('answer')}"
@@ -87,6 +96,9 @@ Relationships:
 
 Source text units:
 {text_text}
+
+Claims / covariates:
+{claim_text}
 
 Prior evidence:
 {prior_text}

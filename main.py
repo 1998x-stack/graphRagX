@@ -30,10 +30,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="graphRagX API",
     description=(
-        "Knowledge-graph retrieval augmented generation with local, global "
-        "map-reduce, DRIFT, and baseline search."
+        "Knowledge-graph retrieval augmented generation with graph-quality "
+        "augmentation, local/global/DRIFT, and baseline search."
     ),
-    version="2.2.0",
+    version="2.3.0",
     lifespan=lifespan,
 )
 
@@ -54,7 +54,7 @@ app.include_router(query_router)
 async def root():
     return {
         "name": "graphRagX API",
-        "version": "2.2.0",
+        "version": "2.3.0",
         "modes": ["local", "global", "drift", "basic"],
         "docs": "/docs",
     }
