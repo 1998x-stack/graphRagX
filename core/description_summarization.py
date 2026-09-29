@@ -15,9 +15,10 @@ from utils.logger import log, log_exception
 class DescriptionSummarizer:
     @staticmethod
     def _mentions(description: str, mentions: list[str]) -> list[str]:
+        source = mentions if mentions else [description]
         values = list(dict.fromkeys(
             item.strip()
-            for item in ([description] + mentions)
+            for item in source
             if item and item.strip()
         ))
         return values[: settings.DESCRIPTION_SUMMARY_MAX_MENTIONS]
