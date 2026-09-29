@@ -1,6 +1,8 @@
 # graphRagX Roadmap
 
-## P0 — correctness and reproducibility (implemented in V2 foundation)
+## P0 — correctness and reproducibility
+
+Implemented in V2:
 
 - deterministic offline embedding provider
 - provider selection from configuration
@@ -14,14 +16,27 @@
 - Basic vector-RAG comparison mode
 - tests and CI
 
-## P1 — GraphRAG fidelity
+## P1A — GraphRAG fidelity
 
-- hierarchical Leiden communities and bottom-up reports
+Implemented in V2.1:
+
+- hierarchical broad-to-fine communities
+- optional Leiden backend
+- bottom-up community reports
+- community-level-aware Global Search
+- map/reduce Global Search
+- rated intermediate evidence points
+- tokenizer-aware context budgets
+- Local source provenance reranking
+
+## P1B — next fidelity layer
+
+- DRIFT query mode with iterative follow-up generation
 - entity/relationship description summarization across mentions
-- map/reduce Global Search with token budgets
-- DRIFT query mode
 - claim/covariate extraction
-- tokenizer-aware context packing and provenance ranking
+- graph pruning configuration
+- dynamic community selection
+- richer context provenance and citation IDs
 
 ## P2 — indexing platform
 

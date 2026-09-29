@@ -73,45 +73,77 @@ class IndexingWorkflow:
 
     async def chunk_documents(self, state: IndexingWorkflowState) -> dict:
         try:
-            doc_ids = [f"{state['index_id']}_doc_{i}" for i in range(len(state["documents"]))]
-            chunks = text_chunker.chunk_documents(state["documents"], doc_ids)
-            return {"chunks": chunks, "current_step": "chunked", "error": None}
+            doc_ids = [
+                f"{state['index_id']}_doc_{index}"
+                for index in range(len(state["documents"]))
+            ]
+            chunks = text_chunker.chunk_documents(
+                state["documents"],
+                doc_ids,
+            )
+            return {
+                "chunks": chunks,
+                "current_step": "chunked",
+                "error": None,
+            }
         except Exception as exc:
             return self._failure(exc, "chunk_documents")
 
     async def extract_entities(self, state: IndexingWorkflowState) -> dict:
         try:
-            results = await entity_relation_extractor.extract_from_chunks(state.get("chunks", []))
-            return {"extraction_results": results, "current_step": "extracted"}
+            results = await entity_relation_extractor.extract_from_chunks(
+                state.get("chunks", [])
+            )
+            return {
+                "extraction_results": results,
+                "current_step": "extracted",
+            }
         except Exception as exc:
             return self._failure(exc, "extract_entities")
 
     async def build_graph_node(self, state: IndexingWorkflowState) -> dict:
         try:
-            kg = graph_builder.build_graph(state.get("extraction_results", []))
-            return {"kg_object": kg, "graph_data": kg.to_graph_data(), "current_step": "graph_built"}
+            kg = graph_builder.build_graph(
+                state.get("extraction_results", [])
+            )
+            return {
+                "kg_object": kg,
+                "graph_data": kg.to_graph_data(),
+                "current_step": "graph_built",
+            }
         except Exception as exc:
             return self._failure(exc, "build_graph")
 
     async def detect_communities(self, state: IndexingWorkflowState) -> dict:
         try:
             kg = state["kg_object"]
-            kg.set_communities(community_detector.detect_communities(kg))
-            return {"kg_object": kg, "graph_data": kg.to_graph_data(), "current_step": "communities_detected"}
+            communities = community_detector.detect_communities(kg)
+            kg.set_communities(communities)
+            return {
+                "kg_object": kg,
+                "graph_data": kg.to_graph_data(),
+                "current_step": "communities_detected",
+            }
         except Exception as exc:
             return self._failure(exc, "detect_communities")
 
     async def generate_summaries(self, state: IndexingWorkflowState) -> dict:
         try:
             kg = state["kg_object"]
-            communities = await community_summarizer.summarize_communities(kg.communities, kg)
+            communities = await community_summarizer.summarize_communities(
+                kg.communities,
+                kg,
+            )
             kg.set_communities(communities)
-            return {"kg_object": kg, "graph_data": kg.to_graph_data(), "current_step": "summaries_generated"}
+            return {
+                "kg_object": kg,
+                "graph_data": kg.to_graph_data(),
+                "current_step": "summaries_generated",
+            }
         except Exception as exc:
             return self._failure(exc, "generate_summaries")
 
     async def build_retrieval_index(self, state: IndexingWorkflowState) -> dict:
-        """Embed retrieval surfaces once during indexing instead of per query."""
         try:
             kg = state["kg_object"]
             chunks = state.get("chunks", [])
@@ -119,47 +151,80 @@ class IndexingWorkflow:
             graph_data.text_chunks = chunks
 
             entity_names = sorted(kg.entities)
-            entity_texts = [f"{name}: {kg.entities[name].description}" for name in entity_names]
+            entity_texts = [
+                f"{name}: {kg.entities[name].description}"
+                for name in entity_names
+            ]
             entity_vectors = await embedding_service.embed_texts(entity_texts)
             graph_data.entity_embeddings = {
-                name: vector.tolist() for name, vector in zip(entity_names, entity_vectors)
+                name: vector.tolist()
+                for name, vector in zip(entity_names, entity_vectors)
             }
 
-            chunk_vectors = await embedding_service.embed_texts([chunk.text for chunk in chunks])
+            chunk_vectors = await embedding_service.embed_texts(
+                [chunk.text for chunk in chunks]
+            )
             graph_data.chunk_embeddings = {
-                chunk.id: vector.tolist() for chunk, vector in zip(chunks, chunk_vectors)
+                chunk.id: vector.tolist()
+                for chunk, vector in zip(chunks, chunk_vectors)
             }
 
-            summarized = [community for community in kg.communities if community.summary]
+            summarized = [
+                community
+                for community in kg.communities
+                if community.summary
+            ]
             community_vectors = await embedding_service.embed_texts(
                 [community.summary or "" for community in summarized]
             )
             graph_data.community_embeddings = {
                 community.id: vector.tolist()
-                for community, vector in zip(summarized, community_vectors)
+                for community, vector in zip(
+                    summarized,
+                    community_vectors,
+                )
             }
 
+            community_levels = sorted(
+                {community.level for community in kg.communities}
+            )
             graph_data.metadata.update(
                 {
                     "schema_version": settings.INDEX_SCHEMA_VERSION,
                     "embedding_provider": settings.EMBEDDING_PROVIDER,
                     "embedding_model": embedding_service.model,
                     "embedding_dimension": embedding_service.dimension,
+                    "community_algorithm": settings.COMMUNITY_ALGORITHM,
+                    "community_levels": community_levels,
+                    "community_max_cluster_size": (
+                        settings.COMMUNITY_MAX_CLUSTER_SIZE
+                    ),
                     "source_metadata": state.get("metadata", {}),
                 }
             )
-            return {"graph_data": graph_data, "current_step": "retrieval_index_built"}
+            return {
+                "graph_data": graph_data,
+                "current_step": "retrieval_index_built",
+            }
         except Exception as exc:
             return self._failure(exc, "build_retrieval_index")
 
     async def save_graph(self, state: IndexingWorkflowState) -> dict:
         try:
-            storage_service.save_graph(state["index_id"], state["graph_data"])
+            storage_service.save_graph(
+                state["index_id"],
+                state["graph_data"],
+            )
             return {"current_step": "completed"}
         except Exception as exc:
             return self._failure(exc, "save_graph")
 
-    async def run(self, index_id: str, documents: List[str], metadata: Dict[str, Any] | None = None) -> dict:
+    async def run(
+        self,
+        index_id: str,
+        documents: List[str],
+        metadata: Dict[str, Any] | None = None,
+    ) -> dict:
         initial: IndexingWorkflowState = {
             "index_id": index_id,
             "documents": documents,
@@ -170,7 +235,11 @@ class IndexingWorkflow:
             "error": None,
         }
         final_state = await self.graph.ainvoke(initial)
-        log.info("Indexing workflow {} finished at {}", index_id, final_state.get("current_step"))
+        log.info(
+            "Indexing workflow {} finished at {}",
+            index_id,
+            final_state.get("current_step"),
+        )
         return final_state
 
 

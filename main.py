@@ -16,9 +16,11 @@ async def lifespan(app: FastAPI):
     del app
     settings.ensure_directories()
     log.info(
-        "graphRagX starting | llm_provider={} embedding_provider={} concurrency={}",
+        "graphRagX starting | llm_provider={} embedding_provider={} "
+        "community_algorithm={} concurrency={}",
         settings.LLM_PROVIDER,
         settings.EMBEDDING_PROVIDER,
+        settings.COMMUNITY_ALGORITHM,
         settings.MAX_CONCURRENCY,
     )
     yield
@@ -27,8 +29,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="graphRagX API",
-    description="Knowledge-graph retrieval augmented generation with local, global, and baseline search.",
-    version="2.0.0",
+    description=(
+        "Knowledge-graph retrieval augmented generation with local, "
+        "global map-reduce, and baseline search."
+    ),
+    version="2.1.0",
     lifespan=lifespan,
 )
 
@@ -49,7 +54,7 @@ app.include_router(query_router)
 async def root():
     return {
         "name": "graphRagX API",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "modes": ["local", "global", "basic"],
         "docs": "/docs",
     }
@@ -63,6 +68,7 @@ async def health_check():
         "providers": {
             "llm": settings.LLM_PROVIDER,
             "embedding": settings.EMBEDDING_PROVIDER,
+            "community": settings.COMMUNITY_ALGORITHM,
         },
     }
 

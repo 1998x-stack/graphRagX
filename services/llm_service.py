@@ -11,7 +11,12 @@ from utils.logger import log, log_exception, log_llm_call, log_stream_chunk
 
 
 class LLMService(ABC):
-    def __init__(self, model: str | None = None, temperature: float | None = None, max_tokens: int | None = None):
+    def __init__(
+        self,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ):
         self.model = model or settings.LLM_MODEL
         self.temperature = settings.LLM_TEMPERATURE if temperature is None else temperature
         self.max_tokens = max_tokens or settings.LLM_MAX_TOKENS
@@ -28,7 +33,12 @@ class LLMService(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def generate_stream(self, prompt: str, task: str = "general", **kwargs) -> AsyncIterator[str]:
+    async def generate_stream(
+        self,
+        prompt: str,
+        task: str = "general",
+        **kwargs,
+    ) -> AsyncIterator[str]:
         raise NotImplementedError
 
     def _persist_if_enabled(self, task: str, prompt: str, response: str) -> None:
@@ -73,7 +83,14 @@ class OpenAILLMService(LLMService):
     ) -> str:
         use_stream = settings.ENABLE_STREAM if stream is None else stream
         if use_stream:
-            chunks = [chunk async for chunk in self.generate_stream(prompt, task=task, **kwargs)]
+            chunks = [
+                chunk
+                async for chunk in self.generate_stream(
+                    prompt,
+                    task=task,
+                    **kwargs,
+                )
+            ]
             response = "".join(chunks)
         else:
             response = ""
@@ -93,7 +110,12 @@ class OpenAILLMService(LLMService):
             self._persist_if_enabled(task, prompt, response)
         return response
 
-    async def generate_stream(self, prompt: str, task: str = "general", **kwargs) -> AsyncIterator[str]:
+    async def generate_stream(
+        self,
+        prompt: str,
+        task: str = "general",
+        **kwargs,
+    ) -> AsyncIterator[str]:
         stream = await self._completion(prompt, stream=True, **kwargs)
         async for event in stream:
             content = event.choices[0].delta.content if event.choices else None
@@ -114,7 +136,7 @@ class MockLLMService(LLMService):
         save_response: bool = True,
         **kwargs,
     ) -> str:
-        del kwargs
+        del stream, kwargs
         if task == "entity_extraction":
             response = (
                 '{"entities": [{"name": "Sample Entity", "type": "CONCEPT", '
@@ -123,8 +145,21 @@ class MockLLMService(LLMService):
             )
         elif task.startswith("community_summary"):
             response = "Offline mock community summary generated for development testing."
+        elif task.startswith("global_map_"):
+            response = (
+                '{"points": [{"description": "Offline mock global evidence point.", '
+                '"score": 50}]}'
+            )
+        elif task == "global_reduce":
+            response = (
+                "Offline mock global answer. Configure LLM_PROVIDER=openai "
+                "for model-generated synthesis."
+            )
         elif task.endswith("query_answer") or task == "basic_query_answer":
-            response = "Offline mock answer. Configure LLM_PROVIDER=openai for model-generated answers."
+            response = (
+                "Offline mock answer. Configure LLM_PROVIDER=openai "
+                "for model-generated answers."
+            )
         else:
             response = f"Offline mock response for task: {task}"
 
@@ -133,8 +168,18 @@ class MockLLMService(LLMService):
             self._persist_if_enabled(task, prompt, response)
         return response
 
-    async def generate_stream(self, prompt: str, task: str = "general", **kwargs) -> AsyncIterator[str]:
-        response = await self.generate(prompt, task=task, save_response=False, **kwargs)
+    async def generate_stream(
+        self,
+        prompt: str,
+        task: str = "general",
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        response = await self.generate(
+            prompt,
+            task=task,
+            save_response=False,
+            **kwargs,
+        )
         yield response
 
 
@@ -148,4 +193,8 @@ def create_llm_service(provider: str | None = None) -> LLMService:
 
 
 llm_service = create_llm_service()
-log.info("LLM service initialized: provider={}, model={}", settings.LLM_PROVIDER, llm_service.model)
+log.info(
+    "LLM service initialized: provider={}, model={}",
+    settings.LLM_PROVIDER,
+    llm_service.model,
+)

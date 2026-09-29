@@ -1,112 +1,118 @@
-"""
-社区摘要生成
-使用 LLM 为每个社区生成自然语言摘要
-"""
-from typing import List
-from models.schemas import Community
+"""Bottom-up community report generation."""
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Dict, List
+
 from models.graph import KnowledgeGraph
-from services.llm_service import llm_service
+from models.schemas import Community
 from prompts.summary_prompts import create_community_summary_prompt
+from services.llm_service import llm_service
+from utils.concurrency import concurrency_controller
 from utils.logger import log, log_exception
 
 
 class CommunitySummarizer:
-    """社区摘要生成器"""
-    
-    def __init__(self):
-        """初始化摘要生成器"""
-        log.info("CommunitySummarizer initialized")
-    
     async def summarize_community(
         self,
         community: Community,
-        kg: KnowledgeGraph
+        kg: KnowledgeGraph,
+        child_reports: list | None = None,
     ) -> str:
-        """
-        为单个社区生成摘要
-        
-        Args:
-            community: 社区对象
-            kg: 知识图谱（用于获取实体和关系详情）
-            
-        Returns:
-            社区摘要文本
-        """
         try:
-            log.info(f"Generating summary for community: {community.id}")
-            
-            # 获取社区中的实体详情
-            entities = []
-            for entity_name in community.entities:
-                entity = kg.get_entity(entity_name)
-                if entity:
-                    entities.append(entity.dict())
-            
-            # 获取社区内部的关系
-            relations = []
-            for relation in kg.relations:
-                if (relation.source in community.entities and 
-                    relation.target in community.entities):
-                    relations.append(relation.dict())
-            
-            # 构建提示词
+            entities = [
+                entity.model_dump()
+                for entity_name in community.entities
+                if (entity := kg.get_entity(entity_name)) is not None
+            ]
+            entity_names = set(community.entities)
+            relations = [
+                relation.model_dump()
+                for relation in kg.relations
+                if relation.source in entity_names and relation.target in entity_names
+            ]
             prompt = create_community_summary_prompt(
                 community_id=community.id,
                 entities=entities,
                 relations=relations,
-                level=community.level
+                level=community.level,
+                child_reports=child_reports or [],
             )
-            
-            # 调用 LLM 生成摘要
             summary = await llm_service.generate(
                 prompt=prompt,
                 task=f"community_summary_{community.id}",
-                save_response=True
+                save_response=True,
             )
-            
-            log.info(f"Generated summary for {community.id} (length: {len(summary)})")
-            return summary.strip()
-            
-        except Exception as e:
-            log_exception(e, f"summarize_community({community.id})")
-            return f"Failed to generate summary for community {community.id}"
-    
+            summary = summary.strip()
+            if not summary:
+                raise RuntimeError(f"Empty community report for {community.id}")
+            return summary
+        except Exception as exc:
+            log_exception(exc, f"summarize_community({community.id})")
+            raise
+
     async def summarize_communities(
         self,
         communities: List[Community],
-        kg: KnowledgeGraph
+        kg: KnowledgeGraph,
     ) -> List[Community]:
-        """
-        批量生成社区摘要
-        
-        Args:
-            communities: 社区列表
-            kg: 知识图谱
-            
-        Returns:
-            包含摘要的社区列表
-        """
-        log.info(f"Generating summaries for {len(communities)} communities")
-        
-        # 使用并发控制
-        from utils.concurrency import concurrency_controller
-        
-        # 创建任务列表
-        async def summarize_single(comm):
-            summary = await self.summarize_community(comm, kg)
-            comm.summary = summary
-            return comm
-        
-        # 并发执行
-        summarized_communities = await concurrency_controller.map_async(
-            func=summarize_single,
-            items=communities,
-            return_exceptions=False
+        """Generate reports from the deepest level upward."""
+        if not communities:
+            return []
+
+        by_id: Dict[str, Community] = {
+            community.id: community.model_copy(deep=True)
+            for community in communities
+        }
+        children_by_parent: Dict[str, List[str]] = defaultdict(list)
+        for community in by_id.values():
+            if community.parent_id:
+                children_by_parent[community.parent_id].append(community.id)
+
+        levels = sorted({community.level for community in by_id.values()}, reverse=True)
+        for level in levels:
+            level_communities = sorted(
+                (community for community in by_id.values() if community.level == level),
+                key=lambda community: community.id,
+            )
+
+            async def summarize_single(community: Community) -> Community:
+                children = [
+                    by_id[child_id]
+                    for child_id in sorted(children_by_parent.get(community.id, []))
+                ]
+                child_reports = [
+                    {
+                        "id": child.id,
+                        "level": child.level,
+                        "summary": child.summary,
+                    }
+                    for child in children
+                    if child.summary
+                ]
+                updated = community.model_copy(deep=True)
+                updated.summary = await self.summarize_community(
+                    updated,
+                    kg,
+                    child_reports=child_reports,
+                )
+                return updated
+
+            summarized = await concurrency_controller.map_async(
+                func=summarize_single,
+                items=level_communities,
+                return_exceptions=False,
+            )
+            for community in summarized:
+                by_id[community.id] = community
+
+        result = sorted(by_id.values(), key=lambda community: (community.level, community.id))
+        log.info(
+            "Generated {} bottom-up community reports across {} level(s)",
+            len(result),
+            len(levels),
         )
-        
-        log.info(f"Generated {len(summarized_communities)} community summaries")
-        return summarized_communities
+        return result
 
 
-# 全局摘要生成器实例
 community_summarizer = CommunitySummarizer()

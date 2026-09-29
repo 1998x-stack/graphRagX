@@ -9,6 +9,7 @@ numpy>=2.0,<3
 loguru>=0.7,<1
 openai>=1.30,<3
 python-dotenv>=1.0,<2
+tiktoken>=0.14,<1
 
 # Development / CI
 pytest>=8.2,<9

@@ -97,6 +97,7 @@ class QueryRequest(BaseModel):
     index_id: str = Field(..., pattern=INDEX_ID_PATTERN)
     mode: Literal["local", "global", "basic"] = "local"
     top_k: int = Field(default=5, ge=1, le=50)
+    community_level: Optional[int] = Field(default=None, ge=0, le=16)
 
 
 class QueryResponse(BaseModel):
@@ -108,7 +109,6 @@ class QueryResponse(BaseModel):
     error: Optional[str] = None
 
 
-# Kept as public schemas for callers that want typed snapshots outside LangGraph.
 class IndexingState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     index_id: str
@@ -127,6 +127,7 @@ class QueryState(BaseModel):
     index_id: str
     mode: Literal["local", "global", "basic"]
     top_k: int = 5
+    community_level: Optional[int] = None
     graph_data: Optional[GraphData] = None
     relevant_context: Dict[str, Any] = Field(default_factory=dict)
     answer: str = ""
