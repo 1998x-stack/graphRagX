@@ -155,6 +155,22 @@ class MockLLMService(LLMService):
                 "Offline mock global answer. Configure LLM_PROVIDER=openai "
                 "for model-generated synthesis."
             )
+        elif task == "drift_primer":
+            response = (
+                '{"answer":"Offline mock DRIFT primer.",'
+                '"follow_ups":[{"question":"Which indexed entities provide the '
+                'strongest local evidence?","score":80}]}'
+            )
+        elif task.startswith("drift_followup_"):
+            response = (
+                '{"answer":"Offline mock DRIFT local evidence.",'
+                '"confidence":0.75,"follow_ups":[]}'
+            )
+        elif task == "drift_reduce":
+            response = (
+                "Offline mock DRIFT answer. Configure LLM_PROVIDER=openai "
+                "for model-generated iterative synthesis."
+            )
         elif task.endswith("query_answer") or task == "basic_query_answer":
             response = (
                 "Offline mock answer. Configure LLM_PROVIDER=openai "
