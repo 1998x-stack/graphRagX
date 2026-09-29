@@ -1,102 +1,80 @@
-"""
-GraphRAG FastAPI 主应用
-使用 Uvicorn 运行
-"""
+"""FastAPI application entry point."""
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 
-from config import settings
-from utils.logger import log
 from api.index import router as index_router
 from api.query import router as query_router
+from config import settings
+from utils.logger import log
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 启动时
-    log.info("=" * 50)
-    log.info("GraphRAG Application Starting...")
-    log.info(f"API Host: {settings.API_HOST}:{settings.API_PORT}")
-    log.info(f"LLM Model: {settings.LLM_MODEL}")
-    log.info(f"Max Concurrency: {settings.MAX_CONCURRENCY}")
-    log.info(f"Output Directory: {settings.OUTPUT_DIR}")
-    log.info("=" * 50)
-    
+    del app
+    settings.ensure_directories()
+    log.info(
+        "graphRagX starting | llm_provider={} embedding_provider={} concurrency={}",
+        settings.LLM_PROVIDER,
+        settings.EMBEDDING_PROVIDER,
+        settings.MAX_CONCURRENCY,
+    )
     yield
-    
-    # 关闭时
-    log.info("GraphRAG Application Shutting Down...")
+    log.info("graphRagX shutting down")
 
 
-# 创建 FastAPI 应用
 app = FastAPI(
-    title="GraphRAG API",
-    description="Knowledge Graph Retrieval Augmented Generation API",
-    version="1.0.0",
-    lifespan=lifespan
+    title="graphRagX API",
+    description="Knowledge-graph retrieval augmented generation with local, global, and baseline search.",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
-# CORS 中间件
+origins = settings.cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应限制
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials="*" not in origins,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
-# 注册路由
 app.include_router(index_router)
 app.include_router(query_router)
 
 
 @app.get("/")
 async def root():
-    """根路径"""
     return {
-        "name": "GraphRAG API",
-        "version": "1.0.0",
-        "status": "running",
-        "endpoints": {
-            "index": "/api/v1/index",
-            "query": "/api/v1/query",
-            "health": "/api/v1/health"
-        }
+        "name": "graphRagX API",
+        "version": "2.0.0",
+        "modes": ["local", "global", "basic"],
+        "docs": "/docs",
     }
 
 
 @app.get("/api/v1/health")
 async def health_check():
-    """健康检查"""
     return {
         "status": "healthy",
-        "service": "GraphRAG",
-        "config": {
-            "llm_model": settings.LLM_MODEL,
-            "embedding_model": settings.EMBEDDING_MODEL,
-            "max_concurrency": settings.MAX_CONCURRENCY,
-            "chunk_size": settings.CHUNK_SIZE
-        }
+        "service": "graphRagX",
+        "providers": {
+            "llm": settings.LLM_PROVIDER,
+            "embedding": settings.EMBEDDING_PROVIDER,
+        },
     }
 
 
 def main():
-    """主入口函数"""
-    try:
-        # 使用 Uvicorn 运行
-        uvicorn.run(
-            "main:app",
-            host=settings.API_HOST,
-            port=settings.API_PORT,
-            reload=settings.API_RELOAD,
-            log_level="info"
-        )
-    except Exception as e:
-        log.exception(f"Failed to start application: {e}")
-        raise
+    uvicorn.run(
+        "main:app",
+        host=settings.API_HOST,
+        port=settings.API_PORT,
+        reload=settings.API_RELOAD,
+        log_level=settings.LOG_LEVEL.lower(),
+    )
 
 
 if __name__ == "__main__":

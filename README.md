@@ -1,265 +1,218 @@
-# GraphRAG 项目
+# graphRagX
 
-基于 LangGraph 的知识图谱检索增强生成（Graph RAG）系统。
+graphRagX is a compact GraphRAG research and engineering baseline built around FastAPI, LangGraph, NetworkX, and pluggable LLM/embedding providers.
 
-## 核心特性
+V2 focuses on one goal: make the repository **deterministic, testable, evidence-preserving, and easy to evolve** instead of leaving important behavior behind TODOs and random mock vectors.
 
-- ✅ **完整的 GraphRAG 流程**: 文档 → 分块 → 提取 → 图谱 → 社区 → 摘要 → 查询
-- ✅ **FastAPI + Uvicorn**: 高性能异步 API
-- ✅ **LangGraph 工作流**: 清晰的状态图管理
-- ✅ **Loguru 日志**: 完整的异常追踪
-- ✅ **并发控制**: asyncio + Semaphore
-- ✅ **LLM 流式输出**: 可选的 streaming 支持
-- ✅ **文件自动保存**: 所有 LLM 输出自动归档
-- ✅ **鲁棒 JSON 提取**: 多策略正则表达式解析
+## What V2 changes
 
-## 技术栈
+- deterministic offline defaults: `mock` LLM + feature-hash embeddings
+- real provider selection from environment variables
+- embeddings built once at index time and persisted with the index
+- Local Search uses both graph structure and source text units
+- Global Search ranks community reports before synthesis
+- Basic Search provides a conventional vector-RAG baseline
+- directed typed relationships via `MultiDiGraph`
+- duplicate relationships are merged instead of silently duplicated
+- workflow failures short-circuit through LangGraph conditional edges
+- safe `index_id` validation blocks path traversal
+- atomic JSON writes reduce corrupted-index risk
+- input/resource limits, safer CORS defaults, and opt-in LLM payload logging
+- unit tests + GitHub Actions CI for Python 3.11-3.13
 
-- **Web 框架**: FastAPI + Uvicorn
-- **工作流**: LangGraph
-- **图算法**: NetworkX + python-louvain
-- **日志**: Loguru
-- **并发**: asyncio
-- **LLM**: 抽象接口（支持 OpenAI/Claude 等）
+## Architecture
 
-## 项目结构
+```text
+Documents
+   │
+   ▼
+Chunking ─────────────► Text Units ───────────────► Chunk Embeddings
+   │
+   ▼
+Entity / Relation Extraction
+   │
+   ▼
+Directed Multi-Relation Knowledge Graph
+   │
+   ├────────► Entity Embeddings
+   │
+   └────────► Louvain Communities ─► Community Reports ─► Community Embeddings
 
+Persisted index
+= graph + communities + text units + retrieval embeddings + metadata
 ```
-graphrag/
-├── main.py                  # 主应用入口
-├── config.py               # 配置管理
-├── models/                 # 数据模型
-├── services/               # 服务层（LLM、Embedding、Storage）
-├── core/                   # 核心算法
-├── workflows/              # LangGraph 工作流
-├── api/                    # API 路由
-├── utils/                  # 工具函数
-├── prompts/                # 提示词模板
-└── outputs/                # 输出目录
+
+Query modes:
+
+```text
+local  : query -> entity seeds -> graph expansion -> source text units -> answer
+global : query -> ranked community reports -> synthesis -> answer
+basic  : query -> ranked text units -> answer
 ```
 
-## 快速开始
+See [`docs/ARCHITECTURE_V2.md`](docs/ARCHITECTURE_V2.md) for design details and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the next stages.
 
-### 1. 安装依赖
+## Quick start
+
+### 1. Create a virtual environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### 2. Install
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env
 ```
 
-### 2. 配置环境变量
+The default `.env` is fully offline and does not make paid API calls.
 
-```bash
-cp .env.template .env
-# 编辑 .env 文件，填入你的 API Key
-```
-
-### 3. 运行服务
+### 3. Run
 
 ```bash
 python main.py
 ```
 
-服务将在 `http://localhost:8000` 启动。
+Open:
 
-### 4. 访问文档
+- API docs: `http://localhost:8000/docs`
+- health: `http://localhost:8000/api/v1/health`
 
-- API 文档: http://localhost:8000/docs
-- 健康检查: http://localhost:8000/api/v1/health
+## Provider modes
 
-## API 使用示例
+Safe defaults:
 
-### 1. 创建索引
+```env
+LLM_PROVIDER=mock
+EMBEDDING_PROVIDER=hash
+```
+
+To use OpenAI-compatible providers:
+
+```env
+LLM_PROVIDER=openai
+LLM_API_KEY=...
+LLM_MODEL=gpt-4.1-mini
+
+EMBEDDING_PROVIDER=openai
+EMBEDDING_API_KEY=...
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSION=256
+```
+
+`hash` embeddings are deterministic lexical feature hashing. They are useful for tests and offline development, but they are **not** a replacement for a semantic embedding model in production.
+
+## API examples
+
+### Create an index
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/index" \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/api/v1/index \
+  -H 'Content-Type: application/json' \
   -d '{
-    "index_id": "my_knowledge_base",
+    "index_id": "demo",
     "documents": [
-      "Alice works for TechCorp as a software engineer...",
-      "TechCorp is a technology company specializing in AI..."
+      "Alice works at Acme on graph retrieval systems.",
+      "Acme develops retrieval and knowledge graph software."
     ]
   }'
 ```
 
-响应:
+Existing index IDs are protected from accidental replacement. To replace one explicitly:
+
 ```json
-{
-  "status": "success",
-  "index_id": "my_knowledge_base",
-  "num_documents": 2,
-  "num_chunks": 5,
-  "num_entities": 15,
-  "num_relations": 8,
-  "num_communities": 3,
-  "processing_time": 45.6
-}
+{"index_id":"demo","documents":["..."],"overwrite":true}
 ```
 
-### 2. 局部搜索（Local Search）
+### Local GraphRAG
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What does Alice do?",
-    "index_id": "my_knowledge_base",
-    "mode": "local",
-    "top_k": 5
-  }'
+curl -X POST http://localhost:8000/api/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"index_id":"demo","query":"What does Alice work on?","mode":"local","top_k":5}'
 ```
 
-### 3. 全局搜索（Global Search）
+### Global GraphRAG
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/query" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What are the main themes in this knowledge base?",
-    "index_id": "my_knowledge_base",
-    "mode": "global"
-  }'
+curl -X POST http://localhost:8000/api/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"index_id":"demo","query":"What are the main themes?","mode":"global","top_k":5}'
 ```
 
-### 4. 列出所有索引
+### Basic vector RAG
 
 ```bash
-curl "http://localhost:8000/api/v1/indexes"
+curl -X POST http://localhost:8000/api/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"index_id":"demo","query":"What does Acme build?","mode":"basic","top_k":5}'
 ```
 
-### 5. 获取索引统计
+### Inspect / delete indexes
 
 ```bash
-curl "http://localhost:8000/api/v1/query/stats/my_knowledge_base"
+curl http://localhost:8000/api/v1/indexes
+curl http://localhost:8000/api/v1/query/stats/demo
+curl -X DELETE http://localhost:8000/api/v1/index/demo
 ```
 
-## 核心算法流程
+## Index lifecycle
 
-### 索引构建流程
+The V2 index payload stores:
 
-```
-1. 文本分块 (Chunking)
-   ├─ 按 chunk_size 切分
-   ├─ 支持句子边界对齐
-   └─ 块之间有 overlap
+- entities and typed relations
+- communities and community reports
+- source text units
+- entity embeddings
+- text-unit embeddings
+- community-report embeddings
+- provider/model/dimension metadata
+- source metadata
 
-2. 实体关系提取 (Extraction)
-   ├─ LLM 提取实体（名称、类型、描述）
-   ├─ LLM 提取关系（源、目标、类型、描述）
-   └─ 鲁棒的 JSON 解析
+When the configured embedding provider/model/dimension differs from the stored index metadata, query logic ignores incompatible stored vectors and rebuilds candidate vectors using the current provider. This preserves correctness at the cost of query-time work.
 
-3. 图谱构建 (Graph Building)
-   ├─ 实体消歧（同名同类型合并）
-   ├─ 关系合并（权重累加）
-   └─ 构建 NetworkX 图
+## Safety and privacy defaults
 
-4. 社区检测 (Community Detection)
-   ├─ Louvain 算法（或 Leiden）
-   ├─ 基于模块度优化
-   └─ 生成层次化社区
+- `index_id` accepts only letters, numbers, `.`, `_`, and `-` and cannot contain path separators.
+- graph writes are atomic (`tempfile` + `os.replace`).
+- raw prompts and model responses are **not** persisted unless `STORE_LLM_PAYLOADS=true`.
+- CORS defaults to localhost development origins instead of wildcard credentials.
+- document count, payload size, query length, and `top_k` are bounded.
 
-5. 社区摘要 (Summarization)
-   ├─ LLM 生成自然语言摘要
-   ├─ 包含主要实体和关系
-   └─ 150-300 词的简洁描述
+These controls are a baseline, not a substitute for authentication, authorization, rate limiting, tenant isolation, or production secret management.
 
-6. 保存存储 (Storage)
-   └─ JSON 格式持久化
-```
+## Development
 
-### 查询流程
-
-**Local Search（局部搜索）:**
-```
-Query → Embedding → 相似实体检索 → 邻居扩展 → 关系提取 → LLM 生成答案
+```bash
+pytest -q
+python -m compileall -q .
+ruff check .
 ```
 
-**Global Search（全局搜索）:**
-```
-Query → 加载社区摘要 → LLM 综合回答
-```
+CI runs compilation checks and the test suite across Python 3.11, 3.12, and 3.13; Ruff remains an optional local quality check.
 
-## 配置说明
+## Current limitations
 
-主要配置项（在 `config.py` 或 `.env`）:
+V2 is intentionally a foundation, not a full clone of Microsoft GraphRAG. The next fidelity improvements are hierarchical Leiden communities, map/reduce Global Search, DRIFT, incremental indexing, richer entity resolution, token-budgeted context packing, real vector-store adapters, and evaluation datasets.
 
-- `MAX_CONCURRENCY`: 并发数（默认 2）
-- `CHUNK_SIZE`: 分块大小（默认 1000）
-- `ENABLE_STREAM`: 启用流式输出
-- `LLM_MODEL`: LLM 模型名称
-- `LEIDEN_RESOLUTION`: 社区检测分辨率
+## References
 
-## TODO 列表
-
-### 必须实现
-
-1. **LLM 服务** (`services/llm_service.py`)
-   - [ ] 实现 OpenAI API 调用
-   - [ ] 实现流式输出
-   - [ ] 添加重试逻辑
-
-2. **Embedding 服务** (`services/embedding_service.py`)
-   - [ ] 实现真实的 Embedding API
-   - [ ] 批量处理优化
-
-### 可选增强
-
-3. **社区检测**
-   - [ ] 安装 igraph 和 leidenalg
-   - [ ] 实现真正的 Leiden 算法
-   - [ ] 支持层次化社区
-
-4. **向量存储**
-   - [ ] 集成 LanceDB 或 Milvus
-   - [ ] 持久化 embeddings
-
-5. **增量索引**
-   - [ ] 支持增量更新
-   - [ ] 避免重新索引整个文档
-
-## 日志和调试
-
-### 日志位置
-
-- 控制台: 彩色输出，实时查看
-- 文件: `./logs/graphrag.log`（自动轮转）
-- LLM 响应: `./outputs/llm_logs/`
-
-### 调试技巧
-
-1. 设置 `LOG_LEVEL=DEBUG` 查看详细日志
-2. 检查 `./outputs/llm_logs/` 查看 LLM 原始响应
-3. 使用 Mock LLM 服务快速测试流程
-
-## 性能优化
-
-1. **并发控制**: 调整 `MAX_CONCURRENCY` 平衡速度和成本
-2. **分块大小**: 较小的块提高精度但增加成本
-3. **缓存**: 缓存 embedding 结果
-4. **批处理**: LLM 批量调用
-
-## 常见问题
-
-### Q: 如何切换 LLM 服务?
-
-A: 修改 `services/llm_service.py` 中的 `create_llm_service("openai")` 参数。
-
-### Q: JSON 解析失败怎么办?
-
-A: 系统有多重解析策略和自动重试。检查 `utils/json_extractor.py` 的日志。
-
-### Q: 如何使用真正的 Leiden 算法?
-
-A: 安装 `igraph` 和 `leidenalg`，修改 `core/community.py`。
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
+- Microsoft GraphRAG: https://microsoft.github.io/graphrag/
+- Query overview: https://microsoft.github.io/graphrag/query/overview/
+- Local Search: https://microsoft.github.io/graphrag/query/local_search/
+- Global Search: https://microsoft.github.io/graphrag/query/global_search/
+- DRIFT Search: https://microsoft.github.io/graphrag/query/drift_search/
+- LangGraph `StateGraph`: https://reference.langchain.com/python/langgraph/graph/state/StateGraph
 
 ## License
 
-MIT License
-
----
-
-**注意**: 这是一个教学和研究项目，生产使用前请充分测试。
+MIT

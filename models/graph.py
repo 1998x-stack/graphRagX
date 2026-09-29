@@ -1,171 +1,147 @@
-"""
-图数据结构
-使用 NetworkX 构建和操作图
-"""
+"""In-memory knowledge graph preserving relation direction and type."""
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Set, Tuple
+
 import networkx as nx
-from typing import List, Dict, Set, Optional
-from models.schemas import Entity, Relation, Community, GraphData
+
+from models.schemas import Community, Entity, GraphData, Relation
 from utils.logger import log
 
 
 class KnowledgeGraph:
-    """知识图谱类"""
-    
     def __init__(self):
-        """初始化知识图谱"""
-        self.graph = nx.Graph()
-        self.entities: Dict[str, Entity] = {}  # {name: Entity}
+        # MultiDiGraph preserves direction and multiple relation types between the
+        # same entity pair. Community detection uses a weighted undirected view.
+        self.graph = nx.MultiDiGraph()
+        self.entities: Dict[str, Entity] = {}
         self.relations: List[Relation] = []
         self.communities: List[Community] = []
-        
-        log.info("KnowledgeGraph initialized")
-    
-    def add_entity(self, entity: Entity):
-        """
-        添加实体到图谱
-        
-        Args:
-            entity: 实体对象
-        """
-        if entity.name not in self.entities:
-            self.entities[entity.name] = entity
-            self.graph.add_node(entity.name, **entity.dict())
-            log.debug(f"Added entity: {entity.name} ({entity.type})")
-        else:
-            # 合并描述（实体消歧）
-            existing = self.entities[entity.name]
-            existing.description += f" | {entity.description}"
-            existing.source_chunk_ids.extend(entity.source_chunk_ids)
-            existing.source_chunk_ids = list(set(existing.source_chunk_ids))
-            log.debug(f"Merged entity: {entity.name}")
-    
-    def add_relation(self, relation: Relation):
-        """
-        添加关系到图谱
-        
-        Args:
-            relation: 关系对象
-        """
-        # 确保实体存在
-        if relation.source not in self.entities or relation.target not in self.entities:
-            log.warning(f"Relation {relation.source}->{relation.target} references non-existent entities")
+        self._relation_index: Dict[Tuple[str, str, str], Relation] = {}
+
+    @staticmethod
+    def _merge_text(left: str, right: str) -> str:
+        parts = [part.strip() for part in (left, right) if part and part.strip()]
+        deduped = list(dict.fromkeys(parts))
+        return " | ".join(deduped)
+
+    def add_entity(self, entity: Entity) -> None:
+        existing = self.entities.get(entity.name)
+        if existing is None:
+            cloned = entity.model_copy(deep=True)
+            self.entities[entity.name] = cloned
+            self.graph.add_node(entity.name, **cloned.model_dump())
             return
-        
-        # 添加边
-        if self.graph.has_edge(relation.source, relation.target):
-            # 更新权重和描述
-            edge_data = self.graph[relation.source][relation.target]
-            edge_data['weight'] = edge_data.get('weight', 1.0) + relation.weight
-            edge_data['descriptions'] = edge_data.get('descriptions', [])
-            edge_data['descriptions'].append(relation.description)
-            log.debug(f"Updated relation: {relation.source} -> {relation.target}")
-        else:
-            self.graph.add_edge(
+
+        if existing.type != entity.type:
+            log.warning(
+                "Entity type conflict for '{}': existing={} incoming={}",
+                entity.name,
+                existing.type,
+                entity.type,
+            )
+        existing.description = self._merge_text(existing.description, entity.description)
+        existing.source_chunk_ids = sorted(set(existing.source_chunk_ids + entity.source_chunk_ids))
+        self.graph.nodes[entity.name].update(existing.model_dump())
+
+    def add_relation(self, relation: Relation) -> None:
+        if relation.source not in self.entities or relation.target not in self.entities:
+            log.warning(
+                "Skipping relation {} -> {} (missing entity)",
                 relation.source,
                 relation.target,
-                weight=relation.weight,
-                relation_type=relation.relation_type,
-                description=relation.description,
-                descriptions=[relation.description]
             )
-            log.debug(f"Added relation: {relation.source} -> {relation.target}")
-        
-        self.relations.append(relation)
-    
+            return
+
+        key = (relation.source, relation.target, relation.relation_type)
+        existing = self._relation_index.get(key)
+        if existing is None:
+            cloned = relation.model_copy(deep=True)
+            self._relation_index[key] = cloned
+            self.relations.append(cloned)
+            self.graph.add_edge(
+                cloned.source,
+                cloned.target,
+                key=cloned.relation_type,
+                weight=cloned.weight,
+                relation_type=cloned.relation_type,
+                description=cloned.description,
+            )
+            return
+
+        existing.weight += relation.weight
+        existing.description = self._merge_text(existing.description, relation.description)
+        existing.source_chunk_ids = sorted(set(existing.source_chunk_ids + relation.source_chunk_ids))
+        edge = self.graph[existing.source][existing.target][existing.relation_type]
+        edge.update(weight=existing.weight, description=existing.description)
+
     def get_entity(self, name: str) -> Optional[Entity]:
-        """获取实体"""
         return self.entities.get(name)
-    
+
     def get_neighbors(self, entity_name: str, depth: int = 1) -> Set[str]:
-        """
-        获取实体的邻居（支持多跳）
-        
-        Args:
-            entity_name: 实体名称
-            depth: 邻居深度
-            
-        Returns:
-            邻居实体名称集合
-        """
-        if entity_name not in self.graph:
+        if entity_name not in self.graph or depth <= 0:
             return set()
-        
-        neighbors = set()
-        current_level = {entity_name}
-        
+        visited = {entity_name}
+        frontier = {entity_name}
         for _ in range(depth):
-            next_level = set()
-            for node in current_level:
-                next_level.update(self.graph.neighbors(node))
-            neighbors.update(next_level)
-            current_level = next_level
-        
-        neighbors.discard(entity_name)  # 移除自己
-        return neighbors
-    
-    def get_subgraph(self, entity_names: List[str]) -> nx.Graph:
-        """
-        获取子图
-        
-        Args:
-            entity_names: 实体名称列表
-            
-        Returns:
-            子图
-        """
+            next_frontier: Set[str] = set()
+            for node in frontier:
+                next_frontier.update(self.graph.successors(node))
+                next_frontier.update(self.graph.predecessors(node))
+            next_frontier -= visited
+            if not next_frontier:
+                break
+            visited.update(next_frontier)
+            frontier = next_frontier
+        visited.discard(entity_name)
+        return visited
+
+    def get_subgraph(self, entity_names: List[str]) -> nx.MultiDiGraph:
         return self.graph.subgraph(entity_names).copy()
-    
-    def set_communities(self, communities: List[Community]):
-        """设置社区列表"""
+
+    def to_undirected_weighted(self) -> nx.Graph:
+        projection = nx.Graph()
+        projection.add_nodes_from(self.graph.nodes())
+        for source, target, data in self.graph.edges(data=True):
+            weight = float(data.get("weight", 1.0))
+            if projection.has_edge(source, target):
+                projection[source][target]["weight"] += weight
+            else:
+                projection.add_edge(source, target, weight=weight)
+        return projection
+
+    def set_communities(self, communities: List[Community]) -> None:
         self.communities = communities
-        log.info(f"Set {len(communities)} communities")
-    
+
     def get_community_by_entity(self, entity_name: str) -> Optional[Community]:
-        """根据实体名称查找所属社区"""
-        for community in self.communities:
-            if entity_name in community.entities:
-                return community
-        return None
-    
+        return next((community for community in self.communities if entity_name in community.entities), None)
+
     def to_graph_data(self) -> GraphData:
-        """转换为 GraphData 对象（用于序列化）"""
         return GraphData(
             entities=self.entities,
             relations=self.relations,
             communities=self.communities,
-            metadata={
-                "num_nodes": self.graph.number_of_nodes(),
-                "num_edges": self.graph.number_of_edges(),
-                "num_communities": len(self.communities)
-            }
+            metadata=self.get_statistics(),
         )
-    
+
     @classmethod
-    def from_graph_data(cls, graph_data: GraphData) -> 'KnowledgeGraph':
-        """从 GraphData 对象重建图谱"""
+    def from_graph_data(cls, graph_data: GraphData) -> "KnowledgeGraph":
         kg = cls()
-        
-        # 添加实体
         for entity in graph_data.entities.values():
             kg.add_entity(entity)
-        
-        # 添加关系
         for relation in graph_data.relations:
             kg.add_relation(relation)
-        
-        # 添加社区
         kg.set_communities(graph_data.communities)
-        
-        log.info(f"Loaded graph: {len(kg.entities)} entities, {len(kg.relations)} relations")
         return kg
-    
-    def get_statistics(self) -> Dict:
-        """获取图谱统计信息"""
+
+    def get_statistics(self) -> Dict[str, float | int]:
+        projection = self.to_undirected_weighted()
+        node_count = projection.number_of_nodes()
         return {
             "num_entities": len(self.entities),
             "num_relations": len(self.relations),
             "num_communities": len(self.communities),
-            "avg_degree": sum(dict(self.graph.degree()).values()) / len(self.graph.nodes()) if self.graph.nodes() else 0,
-            "density": nx.density(self.graph),
-            "connected_components": nx.number_connected_components(self.graph)
+            "avg_degree": (sum(dict(projection.degree()).values()) / node_count) if node_count else 0.0,
+            "density": nx.density(projection),
+            "connected_components": nx.number_connected_components(projection) if node_count else 0,
         }
