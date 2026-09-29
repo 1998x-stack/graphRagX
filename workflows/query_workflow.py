@@ -1,348 +1,578 @@
-"""
-查询工作流
-支持 Local Search 和 Global Search
-"""
-from typing import List, Dict, Any
-from langgraph.graph import Graph, END
-from models.schemas import QueryState, GraphData
+"""Unified query workflow for local, global, and basic retrieval."""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Literal, TypedDict
+
+import numpy as np
+from langgraph.graph import END, START, StateGraph
+
+from config import settings
+from core.community import community_detector
 from models.graph import KnowledgeGraph
-from services.storage_service import storage_service
-from services.llm_service import llm_service
+from models.schemas import GraphData, TextChunk
+from prompts.summary_prompts import (
+    create_basic_search_prompt,
+    create_global_map_prompt,
+    create_global_reduce_prompt,
+    create_local_search_prompt,
+)
 from services.embedding_service import embedding_service
-from prompts.summary_prompts import create_local_search_prompt, create_global_search_prompt
+from services.llm_service import llm_service
+from services.storage_service import storage_service
+from utils.concurrency import concurrency_controller
+from utils.json_extractor import extract_json
 from utils.logger import log, log_exception
+from utils.token_budget import token_budget
+
+
+QueryMode = Literal["local", "global", "basic"]
+
+
+class QueryWorkflowState(TypedDict, total=False):
+    query: str
+    index_id: str
+    mode: QueryMode
+    top_k: int
+    community_level: int | None
+    graph_data: GraphData
+    kg_object: KnowledgeGraph
+    relevant_context: Dict[str, Any]
+    answer: str
+    current_step: str
+    error: str | None
 
 
 class QueryWorkflow:
-    """查询工作流"""
-    
     def __init__(self):
-        """初始化工作流"""
-        self.local_graph = self._build_local_graph()
-        self.global_graph = self._build_global_graph()
-        log.info("QueryWorkflow initialized")
-    
-    def _build_local_graph(self) -> Graph:
-        """
-        构建 Local Search 工作流图
-        
-        流程: start → load_graph → local_search → generate_answer → end
-        """
-        workflow = Graph()
-        
+        self.graph = self._build_graph()
+
+    @staticmethod
+    def _failure(exc: Exception, context: str) -> dict:
+        log_exception(exc, context)
+        return {"current_step": "error", "error": str(exc)}
+
+    @staticmethod
+    def _route_mode(state: QueryWorkflowState) -> str:
+        if state.get("error"):
+            return "end"
+        return state["mode"]
+
+    @staticmethod
+    def _route_after_retrieval(state: QueryWorkflowState) -> str:
+        return "end" if state.get("error") else "continue"
+
+    def _build_graph(self):
+        workflow = StateGraph(QueryWorkflowState)
         workflow.add_node("load_graph", self.load_graph)
         workflow.add_node("local_search", self.local_search)
-        workflow.add_node("generate_answer", self.generate_local_answer)
-        
-        workflow.set_entry_point("load_graph")
-        workflow.add_edge("load_graph", "local_search")
-        workflow.add_edge("local_search", "generate_answer")
-        workflow.add_edge("generate_answer", END)
-        
-        return workflow.compile()
-    
-    def _build_global_graph(self) -> Graph:
-        """
-        构建 Global Search 工作流图
-        
-        流程: start → load_graph → global_search → generate_answer → end
-        """
-        workflow = Graph()
-        
-        workflow.add_node("load_graph", self.load_graph)
         workflow.add_node("global_search", self.global_search)
-        workflow.add_node("generate_answer", self.generate_global_answer)
-        
-        workflow.set_entry_point("load_graph")
-        workflow.add_edge("load_graph", "global_search")
-        workflow.add_edge("global_search", "generate_answer")
-        workflow.add_edge("generate_answer", END)
-        
+        workflow.add_node("basic_search", self.basic_search)
+        workflow.add_node("generate_local_answer", self.generate_local_answer)
+        workflow.add_node("generate_global_answer", self.generate_global_answer)
+        workflow.add_node("generate_basic_answer", self.generate_basic_answer)
+
+        workflow.add_edge(START, "load_graph")
+        workflow.add_conditional_edges(
+            "load_graph",
+            self._route_mode,
+            {
+                "local": "local_search",
+                "global": "global_search",
+                "basic": "basic_search",
+                "end": END,
+            },
+        )
+        for retrieval, generator in (
+            ("local_search", "generate_local_answer"),
+            ("global_search", "generate_global_answer"),
+            ("basic_search", "generate_basic_answer"),
+        ):
+            workflow.add_conditional_edges(
+                retrieval,
+                self._route_after_retrieval,
+                {"continue": generator, "end": END},
+            )
+            workflow.add_edge(generator, END)
         return workflow.compile()
-    
-    async def load_graph(self, state: dict) -> dict:
-        """
-        节点: 加载图谱
-        
-        Args:
-            state: 工作流状态
-            
-        Returns:
-            更新后的状态
-        """
+
+    async def load_graph(self, state: QueryWorkflowState) -> dict:
         try:
-            log.info(f"=== Loading Graph: {state['index_id']} ===")
-            
-            index_id = state["index_id"]
-            
-            # 从存储加载图谱
-            graph_data = storage_service.load_graph(index_id)
-            
-            # 重建 KnowledgeGraph 对象
-            kg = KnowledgeGraph.from_graph_data(graph_data)
-            
-            state["graph_data"] = graph_data
-            state["kg_object"] = kg
-            state["current_step"] = "graph_loaded"
-            
-            log.info(f"Graph loaded: {len(kg.entities)} entities, {len(kg.communities)} communities")
-            return state
-            
-        except Exception as e:
-            log_exception(e, "load_graph")
-            state["error"] = str(e)
-            state["current_step"] = "error"
-            return state
-    
-    async def local_search(self, state: dict) -> dict:
-        """
-        节点: Local Search（局部搜索）
-        
-        策略:
-        1. 对查询生成 embedding
-        2. 找到最相似的实体
-        3. 扩展到邻居节点
-        4. 获取相关关系
-        
-        Args:
-            state: 工作流状态
-            
-        Returns:
-            更新后的状态
-        """
-        try:
-            log.info("=== Step: Local Search ===")
-            
-            query = state["query"]
-            kg = state["kg_object"]
-            top_k = state.get("top_k", 5)
-            
-            # 生成查询 embedding
-            query_embedding = await embedding_service.embed_text(query)
-            
-            # 生成所有实体的 embeddings（实际应预先计算并存储）
-            entity_texts = [
-                f"{entity.name}: {entity.description}"
-                for entity in kg.entities.values()
+            graph_data = storage_service.load_graph(state["index_id"])
+            return {
+                "graph_data": graph_data,
+                "kg_object": KnowledgeGraph.from_graph_data(graph_data),
+                "current_step": "graph_loaded",
+                "error": None,
+            }
+        except Exception as exc:
+            return self._failure(exc, "load_graph")
+
+    @staticmethod
+    def _stored_embeddings_compatible(graph_data: GraphData) -> bool:
+        metadata = graph_data.metadata
+        return (
+            metadata.get("embedding_provider") == settings.EMBEDDING_PROVIDER
+            and metadata.get("embedding_model") == embedding_service.model
+            and metadata.get("embedding_dimension") == embedding_service.dimension
+        )
+
+    async def _rank_named_vectors(
+        self,
+        query: str,
+        names: List[str],
+        vectors_by_name: Dict[str, List[float]],
+        fallback_texts: List[str],
+        top_k: int,
+        use_stored: bool = True,
+    ) -> List[tuple[str, float]]:
+        if not names:
+            return []
+
+        query_vector = await embedding_service.embed_text(query)
+        stored_usable = use_stored and all(
+            name in vectors_by_name
+            and len(vectors_by_name[name]) == len(query_vector)
+            for name in names
+        )
+        if stored_usable:
+            vectors = [
+                np.asarray(vectors_by_name[name], dtype=np.float32)
+                for name in names
             ]
-            entity_embeddings = await embedding_service.embed_texts(entity_texts)
-            
-            # 找到最相似的实体
-            similar_indices = embedding_service.find_most_similar(
-                query_embedding,
-                entity_embeddings,
-                top_k=top_k
+        else:
+            vectors = await embedding_service.embed_texts(fallback_texts)
+
+        scored = [
+            (
+                name,
+                embedding_service.cosine_similarity(query_vector, vector),
             )
-            
-            entity_list = list(kg.entities.values())
-            relevant_entities = [entity_list[i] for i in similar_indices]
-            
-            # 扩展到邻居（1-hop）
-            relevant_entity_names = {e.name for e in relevant_entities}
-            for entity_name in list(relevant_entity_names):
-                neighbors = kg.get_neighbors(entity_name, depth=1)
-                relevant_entity_names.update(neighbors)
-            
-            # 获取相关关系
-            relevant_relations = []
-            for relation in kg.relations:
-                if (relation.source in relevant_entity_names and 
-                    relation.target in relevant_entity_names):
-                    relevant_relations.append(relation)
-            
-            # 构建上下文
-            state["relevant_context"] = {
-                "entities": [kg.entities[name].dict() for name in relevant_entity_names if name in kg.entities],
-                "relations": [r.dict() for r in relevant_relations]
-            }
-            state["current_step"] = "context_retrieved"
-            
-            log.info(
-                f"Local search complete: {len(relevant_entity_names)} entities, "
-                f"{len(relevant_relations)} relations"
+            for name, vector in zip(names, vectors)
+        ]
+        scored.sort(key=lambda item: (-item[1], item[0]))
+        return scored[: min(top_k, len(scored))]
+
+    async def _rank_chunks(
+        self,
+        query: str,
+        chunks: List[TextChunk],
+        graph_data: GraphData,
+        top_k: int,
+    ) -> List[TextChunk]:
+        if not chunks:
+            return []
+
+        query_vector = await embedding_service.embed_text(query)
+        stored_usable = self._stored_embeddings_compatible(graph_data) and all(
+            chunk.id in graph_data.chunk_embeddings
+            and len(graph_data.chunk_embeddings[chunk.id]) == len(query_vector)
+            for chunk in chunks
+        )
+        if stored_usable:
+            vectors = [
+                np.asarray(graph_data.chunk_embeddings[chunk.id], dtype=np.float32)
+                for chunk in chunks
+            ]
+        else:
+            vectors = await embedding_service.embed_texts(
+                [chunk.text for chunk in chunks]
             )
-            return state
-            
-        except Exception as e:
-            log_exception(e, "local_search")
-            state["error"] = str(e)
-            state["current_step"] = "error"
-            return state
-    
-    async def global_search(self, state: dict) -> dict:
-        """
-        节点: Global Search（全局搜索）
-        
-        策略:
-        1. 获取所有社区摘要
-        2. 使用社区摘要回答查询
-        
-        Args:
-            state: 工作流状态
-            
-        Returns:
-            更新后的状态
-        """
+
+        scored = [
+            (
+                chunk,
+                embedding_service.cosine_similarity(query_vector, vector),
+            )
+            for chunk, vector in zip(chunks, vectors)
+        ]
+        scored.sort(key=lambda item: (-item[1], item[0].id))
+        return [chunk for chunk, _ in scored[: min(top_k, len(scored))]]
+
+    async def local_search(self, state: QueryWorkflowState) -> dict:
         try:
-            log.info("=== Step: Global Search ===")
-            
             kg = state["kg_object"]
-            
-            # 获取所有社区摘要
-            community_summaries = []
-            for community in kg.communities:
-                if community.summary:
-                    community_summaries.append({
-                        "id": community.id,
-                        "summary": community.summary,
-                        "size": community.size
-                    })
-            
-            state["relevant_context"] = {
-                "community_summaries": community_summaries
+            graph_data = state["graph_data"]
+            top_k = min(state.get("top_k", 5), settings.MAX_QUERY_TOP_K)
+            entity_names = sorted(kg.entities)
+            ranked_entities = await self._rank_named_vectors(
+                state["query"],
+                entity_names,
+                graph_data.entity_embeddings,
+                [f"{name}: {kg.entities[name].description}" for name in entity_names],
+                top_k,
+                use_stored=self._stored_embeddings_compatible(graph_data),
+            )
+            selected = [name for name, _ in ranked_entities]
+
+            relevant_names = set(selected)
+            for name in selected:
+                relevant_names.update(
+                    kg.get_neighbors(
+                        name,
+                        depth=settings.RETRIEVAL_NEIGHBOR_DEPTH,
+                    )
+                )
+
+            entities = [
+                kg.entities[name].model_dump()
+                for name in sorted(relevant_names)
+                if name in kg.entities
+            ]
+            relations = [
+                relation.model_dump()
+                for relation in kg.relations
+                if relation.source in relevant_names
+                and relation.target in relevant_names
+            ]
+
+            source_chunk_ids = {
+                chunk_id
+                for name in relevant_names
+                if name in kg.entities
+                for chunk_id in kg.entities[name].source_chunk_ids
             }
-            state["current_step"] = "context_retrieved"
-            
-            log.info(f"Global search complete: {len(community_summaries)} community summaries")
-            return state
-            
-        except Exception as e:
-            log_exception(e, "global_search")
-            state["error"] = str(e)
-            state["current_step"] = "error"
-            return state
-    
-    async def generate_local_answer(self, state: dict) -> dict:
-        """
-        节点: 生成 Local Search 答案
-        
-        Args:
-            state: 工作流状态
-            
-        Returns:
-            更新后的状态
-        """
+            chunks_by_id = {
+                chunk.id: chunk
+                for chunk in graph_data.text_chunks
+            }
+            source_chunks = [
+                chunks_by_id[chunk_id]
+                for chunk_id in source_chunk_ids
+                if chunk_id in chunks_by_id
+            ]
+            ranked_chunks = await self._rank_chunks(
+                state["query"],
+                source_chunks,
+                graph_data,
+                top_k=settings.MAX_CONTEXT_CHUNKS,
+            )
+            packed_segments = token_budget.select(
+                [(chunk.id, chunk.text) for chunk in ranked_chunks],
+                settings.LOCAL_MAX_DATA_TOKENS,
+            )
+            packed_text = dict(packed_segments)
+            text_units = [
+                chunk.model_copy(
+                    update={"text": packed_text[chunk.id]}
+                ).model_dump()
+                for chunk in ranked_chunks
+                if chunk.id in packed_text
+            ]
+
+            context = {
+                "entities": entities,
+                "relations": relations,
+                "text_units": text_units,
+                "seed_entities": [
+                    {"name": name, "relevance": score}
+                    for name, score in ranked_entities
+                ],
+            }
+            return {
+                "relevant_context": context,
+                "current_step": "context_retrieved",
+            }
+        except Exception as exc:
+            return self._failure(exc, "local_search")
+
+    async def global_search(self, state: QueryWorkflowState) -> dict:
         try:
-            log.info("=== Step: Generating Local Answer ===")
-            
-            query = state["query"]
+            graph_data = state["graph_data"]
+            communities = [
+                community
+                for community in graph_data.communities
+                if community.summary
+            ]
+            requested_level = state.get("community_level")
+            if requested_level is None:
+                requested_level = settings.GLOBAL_COMMUNITY_LEVEL
+            chosen_level = community_detector.choose_level(
+                communities,
+                requested_level,
+            )
+            level_communities = [
+                community
+                for community in communities
+                if community.level == chosen_level
+            ]
+            ids = [community.id for community in level_communities]
+            limit = min(
+                state.get("top_k", 5),
+                settings.GLOBAL_TOP_K,
+                len(ids),
+            )
+            ranked = await self._rank_named_vectors(
+                state["query"],
+                ids,
+                graph_data.community_embeddings,
+                [community.summary or "" for community in level_communities],
+                limit,
+                use_stored=self._stored_embeddings_compatible(graph_data),
+            )
+            by_id = {
+                community.id: community
+                for community in level_communities
+            }
+            budgeted = token_budget.select(
+                [
+                    (community_id, by_id[community_id].summary or "")
+                    for community_id, _ in ranked
+                ],
+                settings.GLOBAL_MAX_DATA_TOKENS,
+            )
+            budgeted_text = dict(budgeted)
+            reports = [
+                {
+                    "id": community_id,
+                    "summary": budgeted_text[community_id],
+                    "size": by_id[community_id].size,
+                    "level": by_id[community_id].level,
+                    "parent_id": by_id[community_id].parent_id,
+                    "relevance": score,
+                }
+                for community_id, score in ranked
+                if community_id in budgeted_text
+            ]
+            return {
+                "relevant_context": {
+                    "community_summaries": reports,
+                    "community_level": chosen_level,
+                },
+                "current_step": "context_retrieved",
+            }
+        except Exception as exc:
+            return self._failure(exc, "global_search")
+
+    @staticmethod
+    def _parse_global_map_points(
+        raw_response: str,
+        source_reports: List[str],
+    ) -> List[Dict[str, Any]]:
+        data = extract_json(raw_response)
+        points: List[Dict[str, Any]] = []
+        if isinstance(data, dict) and isinstance(data.get("points"), list):
+            for point in data["points"]:
+                if not isinstance(point, dict):
+                    continue
+                description = str(point.get("description", "")).strip()
+                if not description:
+                    continue
+                try:
+                    score = float(point.get("score", 0))
+                except (TypeError, ValueError):
+                    score = 0.0
+                points.append(
+                    {
+                        "description": description,
+                        "score": max(0.0, min(100.0, score)),
+                        "source_reports": source_reports,
+                    }
+                )
+        if not points and raw_response.strip():
+            points.append(
+                {
+                    "description": raw_response.strip(),
+                    "score": 1.0,
+                    "source_reports": source_reports,
+                }
+            )
+        return points
+
+    async def basic_search(self, state: QueryWorkflowState) -> dict:
+        try:
+            graph_data = state["graph_data"]
+            chunks = graph_data.text_chunks
+            if not chunks:
+                return {
+                    "relevant_context": {"text_units": []},
+                    "current_step": "context_retrieved",
+                }
+            ranked = await self._rank_chunks(
+                state["query"],
+                chunks,
+                graph_data,
+                top_k=min(
+                    state.get("top_k", 5),
+                    settings.MAX_QUERY_TOP_K,
+                ),
+            )
+            return {
+                "relevant_context": {
+                    "text_units": [
+                        chunk.model_dump()
+                        for chunk in ranked
+                    ]
+                },
+                "current_step": "context_retrieved",
+            }
+        except Exception as exc:
+            return self._failure(exc, "basic_search")
+
+    async def generate_local_answer(self, state: QueryWorkflowState) -> dict:
+        try:
             context = state["relevant_context"]
-            
-            # 构建提示词
             prompt = create_local_search_prompt(
-                query=query,
-                entities=context["entities"],
-                relations=context["relations"]
+                state["query"],
+                context.get("entities", []),
+                context.get("relations", []),
+                context.get("text_units", []),
             )
-            
-            # 生成答案
             answer = await llm_service.generate(
-                prompt=prompt,
-                task=f"local_query_answer",
-                save_response=True
+                prompt,
+                task="local_query_answer",
             )
-            
-            state["answer"] = answer.strip()
-            state["current_step"] = "completed"
-            
-            log.info(f"Local answer generated (length: {len(answer)})")
-            return state
-            
-        except Exception as e:
-            log_exception(e, "generate_local_answer")
-            state["error"] = str(e)
-            state["current_step"] = "error"
-            return state
-    
-    async def generate_global_answer(self, state: dict) -> dict:
-        """
-        节点: 生成 Global Search 答案
-        
-        Args:
-            state: 工作流状态
-            
-        Returns:
-            更新后的状态
-        """
+            return {
+                "answer": answer.strip(),
+                "current_step": "completed",
+            }
+        except Exception as exc:
+            return self._failure(exc, "generate_local_answer")
+
+    async def generate_global_answer(self, state: QueryWorkflowState) -> dict:
         try:
-            log.info("=== Step: Generating Global Answer ===")
-            
-            query = state["query"]
-            context = state["relevant_context"]
-            
-            # 构建提示词
-            prompt = create_global_search_prompt(
-                query=query,
-                community_summaries=context["community_summaries"]
+            context = dict(state["relevant_context"])
+            reports = context.get("community_summaries", [])
+            if not reports:
+                return {
+                    "answer": (
+                        "No community reports were available at the selected "
+                        "hierarchy level."
+                    ),
+                    "current_step": "completed",
+                }
+
+            batches = token_budget.batches(
+                [
+                    (report["id"], report.get("summary", ""))
+                    for report in reports
+                ],
+                settings.GLOBAL_MAP_BATCH_TOKENS,
             )
-            
-            # 生成答案
+
+            async def map_one(item: tuple[int, list[tuple[str, str]]]):
+                batch_index, batch = item
+                batch_reports = [
+                    {"id": report_id, "summary": summary}
+                    for report_id, summary in batch
+                ]
+                prompt = create_global_map_prompt(
+                    state["query"],
+                    batch_reports,
+                )
+                raw = await llm_service.generate(
+                    prompt,
+                    task=f"global_map_{batch_index}",
+                )
+                return self._parse_global_map_points(
+                    raw,
+                    [report_id for report_id, _ in batch],
+                )
+
+            mapped = await concurrency_controller.map_async(
+                func=map_one,
+                items=list(enumerate(batches)),
+                return_exceptions=False,
+            )
+            points = [
+                point
+                for batch_points in mapped
+                for point in batch_points
+                if point.get("score", 0) > 0
+            ]
+            points.sort(
+                key=lambda point: (
+                    -float(point.get("score", 0)),
+                    point.get("description", ""),
+                )
+            )
+            if not points:
+                return {
+                    "answer": (
+                        "The selected community reports did not contain enough "
+                        "relevant evidence to answer the question."
+                    ),
+                    "current_step": "completed",
+                }
+
+            point_lookup = {
+                f"point_{index}": point
+                for index, point in enumerate(points)
+            }
+            selected_point_text = token_budget.select(
+                [
+                    (point_id, point["description"])
+                    for point_id, point in point_lookup.items()
+                ],
+                settings.GLOBAL_REDUCE_DATA_TOKENS,
+            )
+            reduce_points = [
+                {
+                    **point_lookup[point_id],
+                    "description": description,
+                }
+                for point_id, description in selected_point_text
+            ]
+            prompt = create_global_reduce_prompt(
+                state["query"],
+                reduce_points,
+            )
             answer = await llm_service.generate(
-                prompt=prompt,
-                task=f"global_query_answer",
-                save_response=True
+                prompt,
+                task="global_reduce",
             )
-            
-            state["answer"] = answer.strip()
-            state["current_step"] = "completed"
-            
-            log.info(f"Global answer generated (length: {len(answer)})")
-            return state
-            
-        except Exception as e:
-            log_exception(e, "generate_global_answer")
-            state["error"] = str(e)
-            state["current_step"] = "error"
-            return state
-    
+            context["map_points"] = reduce_points
+            return {
+                "answer": answer.strip(),
+                "relevant_context": context,
+                "current_step": "completed",
+            }
+        except Exception as exc:
+            return self._failure(exc, "generate_global_answer")
+
+    async def generate_basic_answer(self, state: QueryWorkflowState) -> dict:
+        try:
+            prompt = create_basic_search_prompt(
+                state["query"],
+                state["relevant_context"].get("text_units", []),
+            )
+            answer = await llm_service.generate(
+                prompt,
+                task="basic_query_answer",
+            )
+            return {
+                "answer": answer.strip(),
+                "current_step": "completed",
+            }
+        except Exception as exc:
+            return self._failure(exc, "generate_basic_answer")
+
     async def run(
         self,
         query: str,
         index_id: str,
-        mode: str = "local",
-        top_k: int = 5
+        mode: QueryMode = "local",
+        top_k: int = 5,
+        community_level: int | None = None,
     ) -> dict:
-        """
-        运行查询工作流
-        
-        Args:
-            query: 查询问题
-            index_id: 索引ID
-            mode: 查询模式 ('local' or 'global')
-            top_k: 返回结果数量
-            
-        Returns:
-            最终状态
-        """
-        log.info(f"Starting query workflow: mode={mode}, index_id={index_id}")
-        
-        # 初始化状态
-        initial_state = {
+        initial: QueryWorkflowState = {
             "query": query,
             "index_id": index_id,
             "mode": mode,
             "top_k": top_k,
-            "graph_data": None,
-            "relevant_context": [],
+            "community_level": community_level,
+            "relevant_context": {},
             "answer": "",
             "current_step": "init",
-            "error": None
+            "error": None,
         }
-        
-        # 选择工作流
-        if mode == "local":
-            graph = self.local_graph
-        elif mode == "global":
-            graph = self.global_graph
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'local' or 'global'")
-        
-        # 运行工作流
-        final_state = await graph.ainvoke(initial_state)
-        
-        log.info(f"Query workflow completed: {final_state['current_step']}")
+        final_state = await self.graph.ainvoke(initial)
+        log.info(
+            "Query workflow {}:{} finished at {}",
+            index_id,
+            mode,
+            final_state.get("current_step"),
+        )
         return final_state
 
 
-# 全局工作流实例
 query_workflow = QueryWorkflow()

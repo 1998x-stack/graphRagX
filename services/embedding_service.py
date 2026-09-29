@@ -1,138 +1,139 @@
-"""
-Embedding 服务
-用于文本向量化（实体、文本块、社区摘要）
-"""
-from typing import List
+"""Embedding providers and vector similarity helpers."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import re
+from abc import ABC, abstractmethod
+from typing import List, Sequence
+
 import numpy as np
+
 from config import settings
 from utils.logger import log, log_exception
 
 
-class EmbeddingService:
-    """Embedding 服务类"""
-    
-    def __init__(
-        self,
-        model: str = None,
-        dimension: int = None
-    ):
-        """
-        初始化 Embedding 服务
-        
-        Args:
-            model: 模型名称
-            dimension: 向量维度
-        """
+class EmbeddingService(ABC):
+    def __init__(self, model: str | None = None, dimension: int | None = None):
         self.model = model or settings.EMBEDDING_MODEL
         self.dimension = dimension or settings.EMBEDDING_DIMENSION
-        
-        # TODO: 初始化 Embedding 客户端
-        # from openai import AsyncOpenAI
-        # self.client = AsyncOpenAI(api_key=settings.EMBEDDING_API_KEY)
-        
-        log.info(f"EmbeddingService initialized: model={self.model}, dim={self.dimension}")
-        log.warning("EmbeddingService client NOT implemented - using mock embeddings!")
-    
+
+    @abstractmethod
+    async def embed_texts(self, texts: Sequence[str]) -> List[np.ndarray]:
+        raise NotImplementedError
+
     async def embed_text(self, text: str) -> np.ndarray:
-        """
-        对单个文本生成嵌入向量
-        
-        Args:
-            text: 输入文本
-            
-        Returns:
-            嵌入向量（numpy 数组）
-        """
-        try:
-            # TODO: 实现真实的 Embedding API 调用
-            # response = await self.client.embeddings.create(
-            #     model=self.model,
-            #     input=text
-            # )
-            # embedding = np.array(response.data[0].embedding)
-            
-            # 临时 Mock 实现：返回随机向量
-            embedding = np.random.randn(self.dimension).astype(np.float32)
-            embedding = embedding / np.linalg.norm(embedding)  # 归一化
-            
-            log.debug(f"Generated embedding for text (length={len(text)})")
-            return embedding
-            
-        except Exception as e:
-            log_exception(e, "embed_text")
-            raise
-    
-    async def embed_texts(self, texts: List[str]) -> List[np.ndarray]:
-        """
-        批量生成嵌入向量
-        
-        Args:
-            texts: 文本列表
-            
-        Returns:
-            嵌入向量列表
-        """
-        try:
-            # TODO: 实现批量 API 调用（更高效）
-            # response = await self.client.embeddings.create(
-            #     model=self.model,
-            #     input=texts
-            # )
-            # embeddings = [np.array(item.embedding) for item in response.data]
-            
-            # 临时 Mock 实现
-            embeddings = []
-            for text in texts:
-                embedding = await self.embed_text(text)
-                embeddings.append(embedding)
-            
-            log.info(f"Generated {len(embeddings)} embeddings")
-            return embeddings
-            
-        except Exception as e:
-            log_exception(e, "embed_texts")
-            raise
-    
-    def cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """
-        计算余弦相似度
-        
-        Args:
-            vec1: 向量1
-            vec2: 向量2
-            
-        Returns:
-            相似度 [-1, 1]
-        """
-        return float(np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2)))
-    
+        vectors = await self.embed_texts([text])
+        return vectors[0]
+
+    @staticmethod
+    def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+        denominator = float(np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        if denominator == 0.0:
+            return 0.0
+        return float(np.dot(vec1, vec2) / denominator)
+
     def find_most_similar(
         self,
         query_embedding: np.ndarray,
-        embeddings: List[np.ndarray],
-        top_k: int = 5
+        embeddings: Sequence[np.ndarray],
+        top_k: int = 5,
     ) -> List[int]:
-        """
-        查找最相似的向量
-        
-        Args:
-            query_embedding: 查询向量
-            embeddings: 候选向量列表
-            top_k: 返回前 k 个
-            
-        Returns:
-            最相似向量的索引列表
-        """
-        similarities = [
-            self.cosine_similarity(query_embedding, emb)
-            for emb in embeddings
-        ]
-        
-        # 排序并返回 top-k 索引
-        top_indices = np.argsort(similarities)[::-1][:top_k].tolist()
-        log.debug(f"Found top-{top_k} similar items")
-        return top_indices
+        if not embeddings or top_k <= 0:
+            return []
+        similarities = np.asarray(
+            [self.cosine_similarity(query_embedding, item) for item in embeddings],
+            dtype=np.float32,
+        )
+        k = min(top_k, len(embeddings))
+        return np.argsort(similarities)[::-1][:k].tolist()
 
 
-# 全局 Embedding 服务实例
-embedding_service = EmbeddingService()
+class HashEmbeddingService(EmbeddingService):
+    """Deterministic, offline lexical embeddings for development and tests.
+
+    This is intentionally not presented as a semantic embedding model. It is a
+    stable feature-hashing baseline that makes the default project reproducible
+    and useful without credentials.
+    """
+
+    TOKEN_RE = re.compile(r"\w+", flags=re.UNICODE)
+
+    def _embed(self, text: str) -> np.ndarray:
+        vector = np.zeros(self.dimension, dtype=np.float32)
+        tokens = self.TOKEN_RE.findall(text.casefold())
+        if not tokens:
+            return vector
+
+        features = tokens + [f"{a}::{b}" for a, b in zip(tokens, tokens[1:])]
+        for feature in features:
+            digest = hashlib.blake2b(feature.encode("utf-8"), digest_size=16).digest()
+            index = int.from_bytes(digest[:8], "big") % self.dimension
+            sign = 1.0 if digest[8] & 1 else -1.0
+            vector[index] += sign
+
+        norm = float(np.linalg.norm(vector))
+        if norm:
+            vector /= norm
+        return vector
+
+    async def embed_texts(self, texts: Sequence[str]) -> List[np.ndarray]:
+        return [self._embed(text) for text in texts]
+
+
+class OpenAIEmbeddingService(EmbeddingService):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not settings.EMBEDDING_API_KEY:
+            raise ValueError("EMBEDDING_API_KEY is required when EMBEDDING_PROVIDER=openai")
+        from openai import AsyncOpenAI
+
+        self.client = AsyncOpenAI(
+            api_key=settings.EMBEDDING_API_KEY,
+            base_url=settings.EMBEDDING_BASE_URL or None,
+        )
+
+    async def embed_texts(self, texts: Sequence[str]) -> List[np.ndarray]:
+        if not texts:
+            return []
+
+        vectors: List[np.ndarray] = []
+        batch_size = settings.EMBEDDING_BATCH_SIZE
+        for offset in range(0, len(texts), batch_size):
+            batch = list(texts[offset : offset + batch_size])
+            for attempt in range(settings.MAX_RETRY + 1):
+                try:
+                    response = await self.client.embeddings.create(
+                        model=self.model,
+                        input=batch,
+                        dimensions=self.dimension,
+                    )
+                    vectors.extend(
+                        np.asarray(item.embedding, dtype=np.float32)
+                        for item in response.data
+                    )
+                    break
+                except Exception as exc:
+                    if attempt >= settings.MAX_RETRY:
+                        log_exception(exc, "OpenAIEmbeddingService.embed_texts")
+                        raise
+                    await asyncio.sleep(settings.RETRY_DELAY * (2**attempt))
+        return vectors
+
+
+def create_embedding_service(provider: str | None = None) -> EmbeddingService:
+    selected = provider or settings.EMBEDDING_PROVIDER
+    if selected == "hash":
+        return HashEmbeddingService()
+    if selected == "openai":
+        return OpenAIEmbeddingService()
+    raise ValueError(f"Unsupported embedding provider: {selected}")
+
+
+embedding_service = create_embedding_service()
+log.info(
+    "Embedding service initialized: provider={}, model={}, dimension={}",
+    settings.EMBEDDING_PROVIDER,
+    embedding_service.model,
+    embedding_service.dimension,
+)

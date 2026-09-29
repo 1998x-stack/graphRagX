@@ -1,210 +1,185 @@
-"""
-社区检测算法
-使用 Leiden 算法进行层次化社区检测
-"""
-from typing import List, Dict
+"""Hierarchical community detection for the graph's weighted projection."""
+from __future__ import annotations
+
+import random
+from collections import defaultdict
+from typing import Dict, List, Set
+
 import networkx as nx
+
+from config import settings
 from models.graph import KnowledgeGraph
 from models.schemas import Community
-from config import settings
-from utils.logger import log, log_exception
+from utils.logger import log
 
 
 class CommunityDetector:
-    """社区检测器"""
-    
     def __init__(
         self,
-        resolution: float = None,
-        max_iterations: int = None,
-        seed: int = None
+        resolution: float | None = None,
+        seed: int | None = None,
+        max_levels: int | None = None,
+        max_cluster_size: int | None = None,
+        resolution_multiplier: float | None = None,
     ):
-        """
-        初始化社区检测器
-        
-        Args:
-            resolution: 分辨率参数（控制社区粒度）
-            max_iterations: 最大迭代次数
-            seed: 随机种子
-        """
         self.resolution = resolution or settings.LEIDEN_RESOLUTION
-        self.max_iterations = max_iterations or settings.LEIDEN_MAX_ITERATIONS
-        self.seed = seed or settings.LEIDEN_SEED
-        
-        log.info(
-            f"CommunityDetector initialized: "
-            f"resolution={self.resolution}, max_iterations={self.max_iterations}"
+        self.seed = settings.LEIDEN_SEED if seed is None else seed
+        self.max_levels = max_levels or settings.COMMUNITY_MAX_LEVELS
+        self.max_cluster_size = max_cluster_size or settings.COMMUNITY_MAX_CLUSTER_SIZE
+        self.resolution_multiplier = (
+            resolution_multiplier or settings.COMMUNITY_RESOLUTION_MULTIPLIER
         )
-    
+
+    def _partition_louvain(self, graph: nx.Graph, resolution: float) -> List[Set[str]]:
+        if graph.number_of_edges() == 0:
+            return [{node} for node in sorted(graph.nodes())]
+        groups = nx.community.louvain_communities(
+            graph,
+            weight="weight",
+            resolution=resolution,
+            seed=self.seed,
+        )
+        return [set(group) for group in groups]
+
+    def _partition_leiden(self, graph: nx.Graph, resolution: float) -> List[Set[str]]:
+        try:
+            import igraph as ig
+        except ImportError as exc:
+            raise RuntimeError(
+                "COMMUNITY_ALGORITHM=leiden requires python-igraph; "
+                "install requirements-leiden.txt"
+            ) from exc
+
+        nodes = sorted(graph.nodes())
+        if not nodes:
+            return []
+        if graph.number_of_edges() == 0:
+            return [{node} for node in nodes]
+
+        index = {name: position for position, name in enumerate(nodes)}
+        edge_pairs = list(graph.edges())
+        edges = [(index[source], index[target]) for source, target in edge_pairs]
+        weights = [
+            float(graph[source][target].get("weight", 1.0))
+            for source, target in edge_pairs
+        ]
+        ig_graph = ig.Graph(n=len(nodes), edges=edges, directed=False)
+        ig_graph.es["weight"] = weights
+
+        ig.set_random_number_generator(random.Random(self.seed))
+        try:
+            clustering = ig_graph.community_leiden(
+                objective_function="modularity",
+                weights="weight",
+                resolution=resolution,
+                n_iterations=settings.LEIDEN_MAX_ITERATIONS,
+            )
+        finally:
+            ig.set_random_number_generator(None)
+
+        return [
+            {nodes[position] for position in cluster}
+            for cluster in clustering
+        ]
+
+    def _partition_graph(
+        self,
+        graph: nx.Graph,
+        resolution: float,
+        algorithm: str,
+    ) -> List[Set[str]]:
+        if graph.number_of_nodes() == 0:
+            return []
+        if algorithm == "louvain":
+            groups = self._partition_louvain(graph, resolution)
+        elif algorithm == "leiden":
+            groups = self._partition_leiden(graph, resolution)
+        else:
+            raise ValueError(f"Unsupported community algorithm: {algorithm}")
+
+        normalized = [set(group) for group in groups if group]
+        normalized.sort(key=lambda group: tuple(sorted(group)))
+        return normalized
+
     def detect_communities(
         self,
         kg: KnowledgeGraph,
-        algorithm: str = "louvain"  # "louvain" or "leiden" (需要 igraph)
+        algorithm: str | None = None,
     ) -> List[Community]:
-        """
-        检测社区
-        
-        注意：真正的 Leiden 算法需要 igraph 库，这里使用 NetworkX 的 Louvain 作为简化实现
-        
-        Args:
-            kg: 知识图谱
-            algorithm: 算法类型
-            
-        Returns:
-            社区列表
-        """
-        try:
-            log.info(f"Detecting communities using {algorithm} algorithm")
-            
-            if kg.graph.number_of_nodes() == 0:
-                log.warning("Empty graph, no communities to detect")
-                return []
-            
-            # 使用 Louvain 算法（NetworkX 内置）
-            # TODO: 如果需要真正的 Leiden，安装 igraph 和 leidenalg 库
-            import community as community_louvain  # python-louvain 库
-            
-            try:
-                # Louvain 算法
-                partition = community_louvain.best_partition(
-                    kg.graph,
-                    resolution=self.resolution,
-                    random_state=self.seed
+        """Build a broad-to-fine hierarchy."""
+        selected = algorithm or settings.COMMUNITY_ALGORITHM
+        graph = kg.to_undirected_weighted()
+        if graph.number_of_nodes() == 0:
+            return []
+
+        communities: List[Community] = []
+        counters: Dict[int, int] = defaultdict(int)
+
+        def add_partition(
+            subgraph: nx.Graph,
+            parent_id: str | None,
+            level: int,
+            resolution: float,
+        ) -> None:
+            groups = self._partition_graph(subgraph, resolution, selected)
+            for group in groups:
+                community_id = f"L{level}_C{counters[level]}"
+                counters[level] += 1
+                communities.append(
+                    Community(
+                        id=community_id,
+                        level=level,
+                        parent_id=parent_id,
+                        entities=sorted(group),
+                        size=len(group),
+                    )
                 )
-            except ImportError:
-                log.warning("python-louvain not installed, using greedy modularity")
-                # 降级方案：使用 NetworkX 的贪婪模块度算法
-                from networkx.algorithms import community as nx_community
-                communities_gen = nx_community.greedy_modularity_communities(
-                    kg.graph,
-                    resolution=self.resolution
+
+                if (
+                    level + 1 >= self.max_levels
+                    or len(group) <= self.max_cluster_size
+                    or len(group) <= 1
+                ):
+                    continue
+
+                child_graph = graph.subgraph(group).copy()
+                child_groups = self._partition_graph(
+                    child_graph,
+                    resolution * self.resolution_multiplier,
+                    selected,
                 )
-                # 转换为 partition 格式
-                partition = {}
-                for comm_id, nodes in enumerate(communities_gen):
-                    for node in nodes:
-                        partition[node] = comm_id
-            
-            # 转换为 Community 对象
-            communities_dict: Dict[int, List[str]] = {}
-            for node, comm_id in partition.items():
-                if comm_id not in communities_dict:
-                    communities_dict[comm_id] = []
-                communities_dict[comm_id].append(node)
-            
-            communities = []
-            for comm_id, entity_names in communities_dict.items():
-                community = Community(
-                    id=f"community_{comm_id}",
-                    level=0,  # 单层社区
-                    entities=entity_names,
-                    summary=None,  # 稍后生成
-                    parent_id=None,
-                    size=len(entity_names)
+                if len(child_groups) <= 1:
+                    continue
+
+                add_partition(
+                    child_graph,
+                    community_id,
+                    level + 1,
+                    resolution * self.resolution_multiplier,
                 )
-                communities.append(community)
-            
-            log.info(f"Detected {len(communities)} communities")
-            
-            # 打印社区统计
-            sizes = [c.size for c in communities]
-            log.info(
-                f"Community sizes - min: {min(sizes)}, max: {max(sizes)}, "
-                f"avg: {sum(sizes) / len(sizes):.1f}"
-            )
-            
-            return communities
-            
-        except Exception as e:
-            log_exception(e, "detect_communities")
-            raise
-    
-    def detect_hierarchical_communities(
-        self,
-        kg: KnowledgeGraph,
-        max_levels: int = 3
-    ) -> List[Community]:
-        """
-        检测层次化社区（递归社区检测）
-        
-        Args:
-            kg: 知识图谱
-            max_levels: 最大层级数
-            
-        Returns:
-            所有层级的社区列表
-        """
-        log.info(f"Detecting hierarchical communities (max_levels={max_levels})")
-        
-        all_communities = []
-        current_graph = kg.graph.copy()
-        
-        for level in range(max_levels):
-            # 检测当前层级的社区
-            temp_kg = KnowledgeGraph()
-            temp_kg.graph = current_graph
-            
-            level_communities = self.detect_communities(temp_kg)
-            
-            if len(level_communities) <= 1:
-                log.info(f"Stopping at level {level}: only 1 community")
-                break
-            
-            # 设置层级
-            for community in level_communities:
-                community.id = f"L{level}_{community.id}"
-                community.level = level
-            
-            all_communities.extend(level_communities)
-            
-            # 构建下一层级的图（社区作为超节点）
-            if level < max_levels - 1:
-                next_graph = self._aggregate_graph(current_graph, level_communities)
-                if next_graph.number_of_nodes() <= 1:
-                    break
-                current_graph = next_graph
-        
-        log.info(f"Detected {len(all_communities)} communities across {level + 1} levels")
-        return all_communities
-    
-    def _aggregate_graph(
-        self,
-        graph: nx.Graph,
-        communities: List[Community]
-    ) -> nx.Graph:
-        """
-        聚合图：将社区转换为超节点
-        
-        Args:
-            graph: 原始图
-            communities: 社区列表
-            
-        Returns:
-            聚合后的图
-        """
-        # 创建节点到社区的映射
-        node_to_comm = {}
-        for comm in communities:
-            for entity in comm.entities:
-                node_to_comm[entity] = comm.id
-        
-        # 构建新图
-        agg_graph = nx.Graph()
-        
-        # 添加社区间的边
-        for u, v, data in graph.edges(data=True):
-            comm_u = node_to_comm.get(u)
-            comm_v = node_to_comm.get(v)
-            
-            if comm_u and comm_v and comm_u != comm_v:
-                # 跨社区的边
-                if agg_graph.has_edge(comm_u, comm_v):
-                    agg_graph[comm_u][comm_v]['weight'] += data.get('weight', 1.0)
-                else:
-                    agg_graph.add_edge(comm_u, comm_v, weight=data.get('weight', 1.0))
-        
-        return agg_graph
+
+        add_partition(graph, None, 0, self.resolution)
+        log.info(
+            "Detected {} communities across {} level(s) with {}",
+            len(communities),
+            1 + max(community.level for community in communities),
+            selected,
+        )
+        return communities
+
+    @staticmethod
+    def available_levels(communities: List[Community]) -> List[int]:
+        return sorted({community.level for community in communities})
+
+    @staticmethod
+    def choose_level(communities: List[Community], requested: int) -> int:
+        levels = CommunityDetector.available_levels(communities)
+        if not levels:
+            return 0
+        if requested in levels:
+            return requested
+        lower_or_equal = [level for level in levels if level <= requested]
+        return max(lower_or_equal) if lower_or_equal else min(levels)
 
 
-# 全局检测器实例
 community_detector = CommunityDetector()

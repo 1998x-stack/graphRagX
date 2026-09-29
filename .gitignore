@@ -1,3 +1,13 @@
-.vscode
+.venv/
+.env
+.vscode/
+.idea/
 __pycache__/
-*/__pycache__
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+outputs/
+logs/
+.DS_Store
