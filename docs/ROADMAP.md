@@ -29,14 +29,30 @@ Implemented in V2.1:
 - tokenizer-aware context budgets
 - Local source provenance reranking
 
-## P1B — next fidelity layer
+## P1B — iterative DRIFT
 
-- DRIFT query mode with iterative follow-up generation
+Implemented in V2.2:
+
+- DRIFT query mode
+- multi-fold community primer
+- ranked follow-up generation
+- iterative local graph exploration
+- confidence-gated branch expansion
+- query/follow-up deduplication
+- explicit evidence ledger
+- parent/depth trace hierarchy
+- max depth and max action termination
+- token-budgeted final reduce
+- API provenance for DRIFT evidence
+
+## P1C — next fidelity layer
+
 - entity/relationship description summarization across mentions
 - claim/covariate extraction
 - graph pruning configuration
 - dynamic community selection
-- richer context provenance and citation IDs
+- richer citation rendering
+- conversation-history-aware query planning
 
 ## P2 — indexing platform
 
@@ -50,6 +66,7 @@ Implemented in V2.1:
 ## P3 — evaluation and operations
 
 - retrieval evaluation set and answer-level regression tests
+- DRIFT traversal quality metrics
 - cost, latency, token, and cache metrics
 - OpenTelemetry/LangSmith-compatible tracing hooks
 - API auth, tenant isolation, quotas, and rate limits

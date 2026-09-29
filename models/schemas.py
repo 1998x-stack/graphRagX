@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 INDEX_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+QueryMode = Literal["local", "global", "basic", "drift"]
 
 
 class Entity(BaseModel):
@@ -66,6 +67,35 @@ class GraphData(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class DriftFollowUp(BaseModel):
+    id: str
+    question: str = Field(..., min_length=1)
+    score: float = Field(default=0.0, ge=0.0, le=100.0)
+    depth: int = Field(default=1, ge=1)
+    parent_id: Optional[str] = None
+
+
+class DriftEvidence(BaseModel):
+    id: str
+    question: str
+    answer: str
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    depth: int = Field(default=1, ge=1)
+    parent_id: Optional[str] = None
+    source_ids: List[str] = Field(default_factory=list)
+
+
+class DriftTrace(BaseModel):
+    primer_answer: str = ""
+    primer_reports: List[str] = Field(default_factory=list)
+    follow_ups: List[DriftFollowUp] = Field(default_factory=list)
+    evidence: List[DriftEvidence] = Field(default_factory=list)
+    visited_questions: List[str] = Field(default_factory=list)
+    actions_executed: int = 0
+    max_depth_reached: int = 0
+    termination_reason: str = ""
+
+
 class IndexRequest(BaseModel):
     documents: List[str] = Field(..., min_length=1)
     index_id: str = Field(..., pattern=INDEX_ID_PATTERN)
@@ -95,7 +125,7 @@ class IndexResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1)
     index_id: str = Field(..., pattern=INDEX_ID_PATTERN)
-    mode: Literal["local", "global", "basic"] = "local"
+    mode: QueryMode = "local"
     top_k: int = Field(default=5, ge=1, le=50)
     community_level: Optional[int] = Field(default=None, ge=0, le=16)
 
@@ -104,7 +134,7 @@ class QueryResponse(BaseModel):
     status: Literal["success", "failed"]
     answer: str
     sources: List[Dict[str, Any]] = Field(default_factory=list)
-    mode: Literal["local", "global", "basic"]
+    mode: QueryMode
     processing_time: float
     error: Optional[str] = None
 
@@ -125,11 +155,12 @@ class QueryState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     query: str
     index_id: str
-    mode: Literal["local", "global", "basic"]
+    mode: QueryMode
     top_k: int = 5
     community_level: Optional[int] = None
     graph_data: Optional[GraphData] = None
     relevant_context: Dict[str, Any] = Field(default_factory=dict)
+    drift_trace: Optional[DriftTrace] = None
     answer: str = ""
     current_step: str = "init"
     error: Optional[str] = None

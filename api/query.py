@@ -81,6 +81,30 @@ async def query_graph(request: QueryRequest):
                 }
                 for item in context.get("community_summaries", [])
             ]
+        elif request.mode == "drift":
+            sources = [
+                {
+                    "type": "community",
+                    "id": item.get("id"),
+                    "level": item.get("level"),
+                    "relevance": item.get("relevance"),
+                    "summary": item.get("summary", "")[:200],
+                }
+                for item in context.get("community_summaries", [])
+            ]
+            drift = context.get("drift", {})
+            sources.extend(
+                {
+                    "type": "drift_evidence",
+                    "id": item.get("id"),
+                    "depth": item.get("depth"),
+                    "confidence": item.get("confidence"),
+                    "question": item.get("question"),
+                    "source_ids": item.get("source_ids", []),
+                    "answer": item.get("answer", "")[:240],
+                }
+                for item in drift.get("evidence", [])
+            )
         else:
             sources = [
                 {

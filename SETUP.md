@@ -15,13 +15,15 @@ cp .env.example .env
 python main.py
 ~~~
 
-The default configuration uses deterministic offline providers:
+Defaults:
 
 ~~~env
 LLM_PROVIDER=mock
 EMBEDDING_PROVIDER=hash
 COMMUNITY_ALGORITHM=louvain
 ~~~
+
+This mode runs Local, Global, DRIFT, and Basic query control flow without paid API calls.
 
 ## Optional Leiden backend
 
@@ -34,8 +36,6 @@ Then set:
 ~~~env
 COMMUNITY_ALGORITHM=leiden
 ~~~
-
-The default Louvain backend remains available without native graph dependencies.
 
 ## Real model providers
 
@@ -50,21 +50,24 @@ EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSION=256
 ~~~
 
-Optional compatible endpoints can be configured with LLM_BASE_URL and EMBEDDING_BASE_URL.
-
-## Global Search tuning
+## DRIFT tuning
 
 ~~~env
-GLOBAL_COMMUNITY_LEVEL=1
-GLOBAL_TOP_K=24
-GLOBAL_MAX_DATA_TOKENS=8000
-GLOBAL_MAP_BATCH_TOKENS=2000
-GLOBAL_REDUCE_DATA_TOKENS=4000
+DRIFT_K_FOLLOWUPS=3
+DRIFT_PRIMER_FOLDS=3
+DRIFT_N_DEPTH=2
+DRIFT_MAX_ACTIONS=12
+DRIFT_COMMUNITY_LEVEL=1
+DRIFT_PRIMER_DATA_TOKENS=5000
+DRIFT_LOCAL_MAX_DATA_TOKENS=2500
+DRIFT_REDUCE_DATA_TOKENS=5000
+DRIFT_LOCAL_TOP_K_ENTITIES=5
+DRIFT_EXPANSION_MIN_CONFIDENCE=0.35
 ~~~
 
-Higher community levels are finer-grained. Query requests can override the default with community_level.
+Increasing depth or branch count can increase both cost and latency. DRIFT_MAX_ACTIONS is a hard safety bound on exploration work.
 
-## Validate the repository
+## Validate
 
 ~~~bash
 pytest -q
@@ -74,4 +77,4 @@ ruff check .
 
 ## Migration
 
-V2 and V1 JSON indexes remain readable, but existing indexes do not contain the V2.1 hierarchy/report structure. Re-indexing is recommended after upgrading.
+Older V1/V2/V2.1 JSON indexes remain readable because V2.2 does not require new persisted fields for DRIFT. Re-indexing is still recommended when migrating from versions that predate hierarchical communities or persisted retrieval embeddings.

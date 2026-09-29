@@ -61,6 +61,19 @@ class Settings(BaseSettings):
     GLOBAL_MAP_BATCH_TOKENS: int = 2000
     GLOBAL_REDUCE_DATA_TOKENS: int = 4000
     LOCAL_MAX_DATA_TOKENS: int = 4000
+
+    # DRIFT: primer -> iterative local follow-ups -> final reduce.
+    DRIFT_K_FOLLOWUPS: int = 3
+    DRIFT_PRIMER_FOLDS: int = 3
+    DRIFT_N_DEPTH: int = 2
+    DRIFT_MAX_ACTIONS: int = 12
+    DRIFT_COMMUNITY_LEVEL: int = 1
+    DRIFT_PRIMER_DATA_TOKENS: int = 5000
+    DRIFT_LOCAL_MAX_DATA_TOKENS: int = 2500
+    DRIFT_REDUCE_DATA_TOKENS: int = 5000
+    DRIFT_LOCAL_TOP_K_ENTITIES: int = 5
+    DRIFT_EXPANSION_MIN_CONFIDENCE: float = 0.35
+
     MAX_QUERY_TOP_K: int = 50
     MAX_CONTEXT_CHUNKS: int = 12
 
@@ -77,7 +90,7 @@ class Settings(BaseSettings):
     LOG_FILE: Path = Path("./logs/graphrag.log")
     LOG_ROTATION: str = "100 MB"
     LOG_RETENTION: str = "10 days"
-    INDEX_SCHEMA_VERSION: str = "2.1"
+    INDEX_SCHEMA_VERSION: str = "2.2"
 
     @property
     def LLM_LOGS_DIR(self) -> Path:
@@ -120,9 +133,23 @@ class Settings(BaseSettings):
             "GLOBAL_MAP_BATCH_TOKENS",
             "GLOBAL_REDUCE_DATA_TOKENS",
             "LOCAL_MAX_DATA_TOKENS",
+            "DRIFT_PRIMER_DATA_TOKENS",
+            "DRIFT_LOCAL_MAX_DATA_TOKENS",
+            "DRIFT_REDUCE_DATA_TOKENS",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be > 0")
+        for name in (
+            "DRIFT_K_FOLLOWUPS",
+            "DRIFT_PRIMER_FOLDS",
+            "DRIFT_N_DEPTH",
+            "DRIFT_MAX_ACTIONS",
+            "DRIFT_LOCAL_TOP_K_ENTITIES",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be > 0")
+        if not 0.0 <= self.DRIFT_EXPANSION_MIN_CONFIDENCE <= 1.0:
+            raise ValueError("DRIFT_EXPANSION_MIN_CONFIDENCE must be in [0, 1]")
         return self
 
     def ensure_directories(self) -> None:
