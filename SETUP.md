@@ -78,3 +78,42 @@ ruff check .
 ## Migration
 
 Older V1/V2/V2.1 JSON indexes remain readable because V2.2 does not require new persisted fields for DRIFT. Re-indexing is still recommended when migrating from versions that predate hierarchical communities or persisted retrieval embeddings.
+
+
+## V2.3 graph quality tuning
+
+Conservative defaults:
+
+~~~env
+ENTITY_RESOLUTION_STRATEGY=normalized_exact
+DESCRIPTION_SUMMARIZATION_ENABLED=true
+
+GRAPH_PRUNING_ENABLED=true
+PRUNE_MIN_NODE_FREQ=1
+PRUNE_MIN_NODE_DEGREE=0
+PRUNE_MIN_EDGE_WEIGHT_PCT=0
+PRUNE_REMOVE_EGO_NODES=false
+PRUNE_LCC_ONLY=false
+
+CLAIM_EXTRACTION_ENABLED=false
+~~~
+
+The default pruning thresholds are neutral: the stage runs and records before/after
+metrics, but does not intentionally remove ordinary nodes or edges. Tighten thresholds
+only after inspecting `GET /api/v1/index/{index_id}/quality`.
+
+Claims are opt-in because useful claim extraction is domain/prompt dependent.
+
+## Evaluation harness
+
+Create or edit a JSONL dataset following `evaluation/sample.jsonl`, then run:
+
+~~~bash
+python -m scripts.evaluate \
+  --dataset evaluation/sample.jsonl \
+  --output outputs/evaluation/report.json
+~~~
+
+The deterministic report compares Basic, Local, Global, and DRIFT using source recall,
+answer-term coverage, latency, success rate, and DRIFT action count. It intentionally
+does not use an LLM-as-judge by default.

@@ -11,8 +11,6 @@ from utils.logger import log
 
 class KnowledgeGraph:
     def __init__(self):
-        # MultiDiGraph preserves direction and multiple relation types between the
-        # same entity pair. Community detection uses a weighted undirected view.
         self.graph = nx.MultiDiGraph()
         self.entities: Dict[str, Entity] = {}
         self.relations: List[Relation] = []
@@ -22,27 +20,42 @@ class KnowledgeGraph:
     @staticmethod
     def _merge_text(left: str, right: str) -> str:
         parts = [part.strip() for part in (left, right) if part and part.strip()]
-        deduped = list(dict.fromkeys(parts))
-        return " | ".join(deduped)
+        return " | ".join(dict.fromkeys(parts))
+
+    @staticmethod
+    def _merge_list(left: List[str], right: List[str]) -> List[str]:
+        return list(dict.fromkeys(item for item in left + right if item))
 
     def add_entity(self, entity: Entity) -> None:
-        existing = self.entities.get(entity.name)
+        incoming = entity.model_copy(deep=True)
+        incoming.aliases = self._merge_list(incoming.aliases, [incoming.name])
+        if incoming.description and not incoming.description_mentions:
+            incoming.description_mentions = [incoming.description]
+
+        existing = self.entities.get(incoming.name)
         if existing is None:
-            cloned = entity.model_copy(deep=True)
-            self.entities[entity.name] = cloned
-            self.graph.add_node(entity.name, **cloned.model_dump())
+            self.entities[incoming.name] = incoming
+            self.graph.add_node(incoming.name, **incoming.model_dump())
             return
 
-        if existing.type != entity.type:
+        if existing.type != incoming.type:
             log.warning(
                 "Entity type conflict for '{}': existing={} incoming={}",
-                entity.name,
+                incoming.name,
                 existing.type,
-                entity.type,
+                incoming.type,
             )
-        existing.description = self._merge_text(existing.description, entity.description)
-        existing.source_chunk_ids = sorted(set(existing.source_chunk_ids + entity.source_chunk_ids))
-        self.graph.nodes[entity.name].update(existing.model_dump())
+        existing.description = self._merge_text(existing.description, incoming.description)
+        existing.description_mentions = self._merge_list(
+            existing.description_mentions,
+            incoming.description_mentions,
+        )
+        existing.aliases = self._merge_list(existing.aliases, incoming.aliases)
+        existing.mention_count += incoming.mention_count
+        existing.source_chunk_ids = sorted(
+            set(existing.source_chunk_ids + incoming.source_chunk_ids)
+        )
+        self.graph.nodes[incoming.name].update(existing.model_dump())
 
     def add_relation(self, relation: Relation) -> None:
         if relation.source not in self.entities or relation.target not in self.entities:
@@ -53,27 +66,42 @@ class KnowledgeGraph:
             )
             return
 
-        key = (relation.source, relation.target, relation.relation_type)
+        incoming = relation.model_copy(deep=True)
+        if incoming.description and not incoming.description_mentions:
+            incoming.description_mentions = [incoming.description]
+
+        key = (incoming.source, incoming.target, incoming.relation_type)
         existing = self._relation_index.get(key)
         if existing is None:
-            cloned = relation.model_copy(deep=True)
-            self._relation_index[key] = cloned
-            self.relations.append(cloned)
+            self._relation_index[key] = incoming
+            self.relations.append(incoming)
             self.graph.add_edge(
-                cloned.source,
-                cloned.target,
-                key=cloned.relation_type,
-                weight=cloned.weight,
-                relation_type=cloned.relation_type,
-                description=cloned.description,
+                incoming.source,
+                incoming.target,
+                key=incoming.relation_type,
+                weight=incoming.weight,
+                relation_type=incoming.relation_type,
+                description=incoming.description,
+                mention_count=incoming.mention_count,
             )
             return
 
-        existing.weight += relation.weight
-        existing.description = self._merge_text(existing.description, relation.description)
-        existing.source_chunk_ids = sorted(set(existing.source_chunk_ids + relation.source_chunk_ids))
+        existing.weight += incoming.weight
+        existing.mention_count += incoming.mention_count
+        existing.description = self._merge_text(existing.description, incoming.description)
+        existing.description_mentions = self._merge_list(
+            existing.description_mentions,
+            incoming.description_mentions,
+        )
+        existing.source_chunk_ids = sorted(
+            set(existing.source_chunk_ids + incoming.source_chunk_ids)
+        )
         edge = self.graph[existing.source][existing.target][existing.relation_type]
-        edge.update(weight=existing.weight, description=existing.description)
+        edge.update(
+            weight=existing.weight,
+            description=existing.description,
+            mention_count=existing.mention_count,
+        )
 
     def get_entity(self, name: str) -> Optional[Entity]:
         return self.entities.get(name)
@@ -114,7 +142,14 @@ class KnowledgeGraph:
         self.communities = communities
 
     def get_community_by_entity(self, entity_name: str) -> Optional[Community]:
-        return next((community for community in self.communities if entity_name in community.entities), None)
+        return next(
+            (
+                community
+                for community in self.communities
+                if entity_name in community.entities
+            ),
+            None,
+        )
 
     def to_graph_data(self) -> GraphData:
         return GraphData(
@@ -141,7 +176,19 @@ class KnowledgeGraph:
             "num_entities": len(self.entities),
             "num_relations": len(self.relations),
             "num_communities": len(self.communities),
-            "avg_degree": (sum(dict(projection.degree()).values()) / node_count) if node_count else 0.0,
+            "entity_mentions": sum(
+                entity.mention_count for entity in self.entities.values()
+            ),
+            "relation_mentions": sum(
+                relation.mention_count for relation in self.relations
+            ),
+            "avg_degree": (
+                sum(dict(projection.degree()).values()) / node_count
+            ) if node_count else 0.0,
             "density": nx.density(projection),
-            "connected_components": nx.number_connected_components(projection) if node_count else 0,
+            "connected_components": (
+                nx.number_connected_components(projection)
+                if node_count
+                else 0
+            ),
         }

@@ -75,3 +75,23 @@ async def delete_index(index_id: str):
         raise HTTPException(status_code=404, detail=f"Index not found: {index_id}")
     log.info("Deleted index {}", index_id)
     return {"status": "success", "index_id": index_id}
+
+
+@router.get("/index/{index_id}/quality")
+async def get_index_quality(index_id: str):
+    try:
+        graph_data = storage_service.load_graph(index_id)
+        return {
+            "status": "success",
+            "index_id": index_id,
+            "quality_report": graph_data.quality_report,
+            "num_claims": len(graph_data.covariates),
+            "schema_version": graph_data.metadata.get("schema_version"),
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Index not found: {index_id}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

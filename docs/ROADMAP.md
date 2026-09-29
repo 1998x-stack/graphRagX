@@ -45,14 +45,28 @@ Implemented in V2.2:
 - token-budgeted final reduce
 - API provenance for DRIFT evidence
 
-## P1C — next fidelity layer
+## P1C — graph and retrieval quality
 
-- entity/relationship description summarization across mentions
-- claim/covariate extraction
-- graph pruning configuration
-- dynamic community selection
+Implemented in V2.3:
+
+- normalized-exact entity alias resolution
+- entity/relationship mention preservation
+- entity/relationship description summarization
+- auditable graph pruning
+- optional claim/covariate extraction
+- claim-aware Local/DRIFT evidence
+- index quality reports
+- Basic/Local/Global/DRIFT evaluation harness
+- deterministic source-recall and answer-term metrics
+
+## P1D — next fidelity layer
+
+- learned/fuzzy entity resolution with merge confidence
+- dynamic community-level selection
+- graph-aware reranking
 - richer citation rendering
 - conversation-history-aware query planning
+- optional external judge metrics with calibration
 
 ## P2 — indexing platform
 
