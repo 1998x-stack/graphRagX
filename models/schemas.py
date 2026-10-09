@@ -12,6 +12,9 @@ class Entity(BaseModel):
     name: str = Field(..., min_length=1)
     type: str = Field(..., min_length=1)
     description: str = Field(default="")
+    aliases: List[str] = Field(default_factory=list)
+    mention_count: int = Field(default=1, ge=1)
+    description_mentions: List[str] = Field(default_factory=list)
     source_chunk_ids: List[str] = Field(default_factory=list)
 
     def __hash__(self) -> int:
@@ -23,11 +26,27 @@ class Relation(BaseModel):
     target: str = Field(..., min_length=1)
     relation_type: str = Field(..., min_length=1)
     description: str = Field(default="")
+    mention_count: int = Field(default=1, ge=1)
+    description_mentions: List[str] = Field(default_factory=list)
     weight: float = Field(default=1.0, gt=0)
     source_chunk_ids: List[str] = Field(default_factory=list)
 
     def __hash__(self) -> int:
         return hash((self.source, self.target, self.relation_type))
+
+
+class Claim(BaseModel):
+    id: str = Field(..., min_length=1)
+    covariate_type: Literal["claim"] = "claim"
+    type: str = Field(default="FACT")
+    description: str = Field(..., min_length=1)
+    subject_id: str = Field(..., min_length=1)
+    object_id: Optional[str] = None
+    status: Literal["TRUE", "FALSE", "SUSPECTED", "UNKNOWN"] = "UNKNOWN"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    source_text: str = Field(default="")
+    text_unit_id: str = Field(..., min_length=1)
 
 
 class Community(BaseModel):
@@ -60,10 +79,12 @@ class GraphData(BaseModel):
     entities: Dict[str, Entity] = Field(default_factory=dict)
     relations: List[Relation] = Field(default_factory=list)
     communities: List[Community] = Field(default_factory=list)
+    covariates: List[Claim] = Field(default_factory=list)
     text_chunks: List[TextChunk] = Field(default_factory=list)
     entity_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
     chunk_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
     community_embeddings: Dict[str, List[float]] = Field(default_factory=dict)
+    quality_report: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

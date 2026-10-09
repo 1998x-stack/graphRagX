@@ -7,12 +7,16 @@ from langgraph.graph import END, START, StateGraph
 
 from config import settings
 from core.chunking import text_chunker
+from core.claims import claim_extractor
 from core.community import community_detector
+from core.description_summarization import description_summarizer
+from core.entity_resolution import entity_resolver
 from core.extraction import entity_relation_extractor
 from core.graph_builder import graph_builder
+from core.pruning import graph_pruner
 from core.summarization import community_summarizer
 from models.graph import KnowledgeGraph
-from models.schemas import ExtractionResult, GraphData, TextChunk
+from models.schemas import Claim, ExtractionResult, GraphData, TextChunk
 from services.embedding_service import embedding_service
 from services.storage_service import storage_service
 from utils.logger import log, log_exception
@@ -24,6 +28,8 @@ class IndexingWorkflowState(TypedDict, total=False):
     metadata: Dict[str, Any]
     chunks: List[TextChunk]
     extraction_results: List[ExtractionResult]
+    claims: List[Claim]
+    quality_report: Dict[str, Any]
     kg_object: KnowledgeGraph
     graph_data: GraphData
     current_step: str
@@ -43,11 +49,25 @@ class IndexingWorkflow:
         log_exception(exc, context)
         return {"current_step": "error", "error": str(exc)}
 
+    @staticmethod
+    def _quality_update(
+        state: IndexingWorkflowState,
+        key: str,
+        value: Any,
+    ) -> Dict[str, Any]:
+        report = dict(state.get("quality_report", {}))
+        report[key] = value
+        return report
+
     def _build_graph(self):
         workflow = StateGraph(IndexingWorkflowState)
         workflow.add_node("chunk_documents", self.chunk_documents)
         workflow.add_node("extract_entities", self.extract_entities)
+        workflow.add_node("resolve_entities", self.resolve_entities)
         workflow.add_node("build_graph", self.build_graph_node)
+        workflow.add_node("summarize_descriptions", self.summarize_descriptions)
+        workflow.add_node("prune_graph", self.prune_graph)
+        workflow.add_node("extract_claims", self.extract_claims)
         workflow.add_node("detect_communities", self.detect_communities)
         workflow.add_node("generate_summaries", self.generate_summaries)
         workflow.add_node("build_retrieval_index", self.build_retrieval_index)
@@ -56,8 +76,12 @@ class IndexingWorkflow:
         workflow.add_edge(START, "chunk_documents")
         steps = [
             ("chunk_documents", "extract_entities"),
-            ("extract_entities", "build_graph"),
-            ("build_graph", "detect_communities"),
+            ("extract_entities", "resolve_entities"),
+            ("resolve_entities", "build_graph"),
+            ("build_graph", "summarize_descriptions"),
+            ("summarize_descriptions", "prune_graph"),
+            ("prune_graph", "extract_claims"),
+            ("extract_claims", "detect_communities"),
             ("detect_communities", "generate_summaries"),
             ("generate_summaries", "build_retrieval_index"),
             ("build_retrieval_index", "save_graph"),
@@ -101,6 +125,23 @@ class IndexingWorkflow:
         except Exception as exc:
             return self._failure(exc, "extract_entities")
 
+    async def resolve_entities(self, state: IndexingWorkflowState) -> dict:
+        try:
+            results, report = entity_resolver.resolve(
+                state.get("extraction_results", [])
+            )
+            return {
+                "extraction_results": results,
+                "quality_report": self._quality_update(
+                    state,
+                    "entity_resolution",
+                    report,
+                ),
+                "current_step": "entities_resolved",
+            }
+        except Exception as exc:
+            return self._failure(exc, "resolve_entities")
+
     async def build_graph_node(self, state: IndexingWorkflowState) -> dict:
         try:
             kg = graph_builder.build_graph(
@@ -113,6 +154,65 @@ class IndexingWorkflow:
             }
         except Exception as exc:
             return self._failure(exc, "build_graph")
+
+    async def summarize_descriptions(self, state: IndexingWorkflowState) -> dict:
+        try:
+            kg = await description_summarizer.summarize_graph(
+                state["kg_object"]
+            )
+            return {
+                "kg_object": kg,
+                "graph_data": kg.to_graph_data(),
+                "quality_report": self._quality_update(
+                    state,
+                    "description_summarization",
+                    {
+                        "enabled": settings.DESCRIPTION_SUMMARIZATION_ENABLED,
+                        "entities": len(kg.entities),
+                        "relations": len(kg.relations),
+                    },
+                ),
+                "current_step": "descriptions_summarized",
+            }
+        except Exception as exc:
+            return self._failure(exc, "summarize_descriptions")
+
+    async def prune_graph(self, state: IndexingWorkflowState) -> dict:
+        try:
+            kg, report = graph_pruner.prune(state["kg_object"])
+            return {
+                "kg_object": kg,
+                "graph_data": kg.to_graph_data(),
+                "quality_report": self._quality_update(
+                    state,
+                    "graph_pruning",
+                    report,
+                ),
+                "current_step": "graph_pruned",
+            }
+        except Exception as exc:
+            return self._failure(exc, "prune_graph")
+
+    async def extract_claims(self, state: IndexingWorkflowState) -> dict:
+        try:
+            claims = await claim_extractor.extract(
+                state.get("chunks", []),
+                state["kg_object"],
+            )
+            return {
+                "claims": claims,
+                "quality_report": self._quality_update(
+                    state,
+                    "claims",
+                    {
+                        "enabled": settings.CLAIM_EXTRACTION_ENABLED,
+                        "count": len(claims),
+                    },
+                ),
+                "current_step": "claims_extracted",
+            }
+        except Exception as exc:
+            return self._failure(exc, "extract_claims")
 
     async def detect_communities(self, state: IndexingWorkflowState) -> dict:
         try:
@@ -149,6 +249,8 @@ class IndexingWorkflow:
             chunks = state.get("chunks", [])
             graph_data = kg.to_graph_data()
             graph_data.text_chunks = chunks
+            graph_data.covariates = state.get("claims", [])
+            graph_data.quality_report = state.get("quality_report", {})
 
             entity_names = sorted(kg.entities)
             entity_texts = [
@@ -199,6 +301,8 @@ class IndexingWorkflow:
                     "community_max_cluster_size": (
                         settings.COMMUNITY_MAX_CLUSTER_SIZE
                     ),
+                    "claims_enabled": settings.CLAIM_EXTRACTION_ENABLED,
+                    "num_claims": len(graph_data.covariates),
                     "source_metadata": state.get("metadata", {}),
                 }
             )
@@ -231,6 +335,8 @@ class IndexingWorkflow:
             "metadata": metadata or {},
             "chunks": [],
             "extraction_results": [],
+            "claims": [],
+            "quality_report": {},
             "current_step": "init",
             "error": None,
         }

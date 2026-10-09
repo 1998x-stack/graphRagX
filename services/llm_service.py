@@ -143,6 +143,8 @@ class MockLLMService(LLMService):
                 '"description": "Deterministic mock entity for offline execution"}], '
                 '"relations": []}'
             )
+        elif task == "claim_extraction":
+            response = '{"claims":[]}'
         elif task.startswith("community_summary"):
             response = "Offline mock community summary generated for development testing."
         elif task.startswith("global_map_"):

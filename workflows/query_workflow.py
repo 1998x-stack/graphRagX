@@ -241,6 +241,12 @@ class QueryWorkflow:
             if relation.source in relevant_names
             and relation.target in relevant_names
         ]
+        claims = [
+            claim.model_dump()
+            for claim in graph_data.covariates
+            if claim.subject_id in relevant_names
+            or (claim.object_id is not None and claim.object_id in relevant_names)
+        ]
 
         source_chunk_ids = {
             chunk_id
@@ -276,6 +282,7 @@ class QueryWorkflow:
         return {
             "entities": entities,
             "relations": relations,
+            "claims": claims,
             "text_units": text_units,
             "seed_entities": [
                 {"name": name, "relevance": score}
@@ -629,6 +636,7 @@ class QueryWorkflow:
                         followup_query=followup.question,
                         entities=local_context.get("entities", []),
                         relations=local_context.get("relations", []),
+                        claims=local_context.get("claims", []),
                         text_units=local_context.get("text_units", []),
                         prior_evidence=[
                             item.model_dump()
@@ -653,6 +661,11 @@ class QueryWorkflow:
                         f"entity:{item.get('name')}"
                         for item in local_context.get("seed_entities", [])
                         if item.get("name")
+                    )
+                    source_ids.extend(
+                        item.get("id")
+                        for item in local_context.get("claims", [])
+                        if item.get("id")
                     )
                     return (
                         DriftEvidence(
@@ -766,6 +779,7 @@ class QueryWorkflow:
                 context.get("entities", []),
                 context.get("relations", []),
                 context.get("text_units", []),
+                context.get("claims", []),
             )
             answer = await llm_service.generate(
                 prompt,

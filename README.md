@@ -2,7 +2,7 @@
 
 graphRagX is a compact GraphRAG research and engineering baseline built with FastAPI, LangGraph, NetworkX, tokenizer-aware context budgeting, and pluggable LLM/embedding/community backends.
 
-V2.2 supports four query modes:
+V2.3 adds graph-quality augmentation and keeps four query modes:
 
 - Local Search
 - Global Search
@@ -46,6 +46,48 @@ query -> community primer -> ranked follow-ups
 Basic:
 query -> text-unit vectors -> answer
 ~~~
+
+## V2.3 Graph Quality & Retrieval Quality
+
+V2.3 adds quality stages before community detection:
+
+~~~text
+Extract
+  -> Entity resolution
+  -> Graph merge
+  -> Entity/relation description consolidation
+  -> Graph pruning
+  -> Optional claims/covariates
+  -> Communities + retrieval indexes
+~~~
+
+Key properties:
+
+- conservative normalized-exact alias resolution
+- entity and relationship mention counts
+- preserved raw description mentions
+- auditable graph pruning with before/after statistics
+- optional claim extraction, disabled by default
+- claim-aware Local and DRIFT context
+- per-index quality reports
+- deterministic four-mode evaluation harness
+
+Inspect index quality:
+
+~~~bash
+curl http://localhost:8000/api/v1/index/demo/quality
+~~~
+
+Run a cross-mode evaluation:
+
+~~~bash
+python -m scripts.evaluate \
+  --dataset evaluation/sample.jsonl \
+  --output outputs/evaluation/report.json
+~~~
+
+The baseline evaluator reports source recall, answer-term coverage, latency, success rate,
+and DRIFT action count without requiring an LLM judge.
 
 ## V2.2 DRIFT
 
@@ -177,6 +219,7 @@ CI validates Python 3.11, 3.12, and 3.13. A separate job installs python-igraph 
 - docs/ARCHITECTURE_V2.md
 - docs/ARCHITECTURE_V2_1.md
 - docs/ARCHITECTURE_V2_2.md
+- docs/ARCHITECTURE_V2_3.md
 - docs/ROADMAP.md
 
 ## References

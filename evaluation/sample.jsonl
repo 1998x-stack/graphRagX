@@ -1,0 +1,1 @@
+{"id":"example-1","index_id":"demo","query":"What does the indexed evidence say about GraphRAG?","modes":["basic","local","global","drift"],"expected_source_ids":[],"expected_answer_terms":[],"top_k":5}

@@ -69,6 +69,17 @@ async def query_graph(request: QueryRequest):
                 }
                 for item in context.get("entities", [])[: request.top_k]
             )
+            sources.extend(
+                {
+                    "type": "claim",
+                    "id": item.get("id"),
+                    "status": item.get("status"),
+                    "subject_id": item.get("subject_id"),
+                    "object_id": item.get("object_id"),
+                    "description": item.get("description", "")[:240],
+                }
+                for item in context.get("claims", [])
+            )
         elif request.mode == "global":
             sources = [
                 {
@@ -145,6 +156,8 @@ async def get_query_stats(index_id: str):
                 "has_community_embeddings": bool(
                     graph_data.community_embeddings
                 ),
+                "num_claims": len(graph_data.covariates),
+                "quality_report": graph_data.quality_report,
             }
         )
         return {"status": "success", "stats": stats}

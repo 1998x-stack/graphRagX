@@ -46,6 +46,7 @@ def create_local_search_prompt(
     entities: list,
     relations: list,
     text_units: list | None = None,
+    claims: list | None = None,
 ) -> str:
     entity_text = "\n".join(
         f"- {item.get('name')} ({item.get('type')}): {item.get('description', '')}"
@@ -59,6 +60,14 @@ def create_local_search_prompt(
         f"- [{item.get('id')}] {item.get('text', '')}"
         for item in (text_units or [])
     ) or "- none"
+    claim_text = "\n".join(
+        (
+            f"- [{item.get('id')}] status={item.get('status')} "
+            f"{item.get('subject_id')} -> {item.get('object_id')}: "
+            f"{item.get('description', '')}"
+        )
+        for item in (claims or [])
+    ) or "- none"
     return f"""Answer the user question using only the supplied GraphRAG context. If the evidence is insufficient, say so explicitly.
 
 Entities:
@@ -69,6 +78,9 @@ Relationships:
 
 Source text units:
 {text_unit_text}
+
+Claims / covariates:
+{claim_text}
 
 Question: {query}
 
