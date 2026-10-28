@@ -143,6 +143,24 @@ python -m scripts.hf_eval run \
 - Each perturbation gets its own content-addressed index ID; records store
   base case ID and perturbation seed.
 
+### E. Generate an inspectable report
+
+```bash
+python -m scripts.hf_report \
+  --input outputs/evaluation/hotpot-real.json \
+  --output-dir outputs/evaluation/hotpot-report
+
+# Optional charts; install matplotlib separately:
+pip install matplotlib
+python -m scripts.hf_report \
+  --input outputs/evaluation/hotpot-real.json \
+  --output-dir outputs/evaluation/hotpot-report --plots
+```
+
+This produces `summary.md` and `per_question.csv`, plus optional PNG
+figures **separately for each dataset**. Offline smoke reports carry a
+prominent warning and cannot be treated as accuracy measurements.
+
 ## 3. Seven dimensions, with interpretation constraints
 
 | Axis | Implemented metrics | Supported task | Caveat |
