@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 from typing import Any, Dict, List, TypedDict
 
@@ -485,34 +486,40 @@ class QueryWorkflow:
         raw_response: str,
         source_reports: List[str],
     ) -> List[Dict[str, Any]]:
+        """Require structured rated evidence and validate report provenance."""
         data = extract_json(raw_response)
+        if not isinstance(data, dict) or not isinstance(data.get("points"), list):
+            raise ValueError("Global map model response must contain a JSON points list")
+        allowed = set(source_reports)
         points: List[Dict[str, Any]] = []
-        if isinstance(data, dict) and isinstance(data.get("points"), list):
-            for point in data["points"]:
-                if not isinstance(point, dict):
+        for item in data["points"]:
+            if not isinstance(item, dict):
+                continue
+            description = str(item.get("description", "")).strip()
+            if not description:
+                continue
+            try:
+                score = float(item["score"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(score):
+                continue
+            requested = item.get("source_reports")
+            if isinstance(requested, list) and requested:
+                # Refuse to surface fabricated community/text-unit citations.
+                sources = list(dict.fromkeys(
+                    ref for ref in requested if isinstance(ref, str) and ref in allowed
+                ))
+                if not sources:
                     continue
-                description = str(point.get("description", "")).strip()
-                if not description:
-                    continue
-                try:
-                    score = float(point.get("score", 0))
-                except (TypeError, ValueError):
-                    score = 0.0
-                points.append(
-                    {
-                        "description": description,
-                        "score": max(0.0, min(100.0, score)),
-                        "source_reports": source_reports,
-                    }
-                )
-        if not points and raw_response.strip():
-            points.append(
-                {
-                    "description": raw_response.strip(),
-                    "score": 1.0,
-                    "source_reports": source_reports,
-                }
-            )
+            else:
+                # Legacy model prompts did not return per-point provenance.
+                sources = list(dict.fromkeys(source_reports))
+            points.append({
+                "description": description,
+                "score": max(0.0, min(100.0, score)),
+                "source_reports": sources,
+            })
         return points
 
     @staticmethod
