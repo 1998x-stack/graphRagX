@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Dict, List
 
 from models.graph import KnowledgeGraph
-from models.schemas import Community
+from models.schemas import Claim, Community
 from prompts.summary_prompts import create_community_summary_prompt
 from services.llm_service import llm_service
 from utils.concurrency import concurrency_controller
@@ -18,25 +18,49 @@ class CommunitySummarizer:
         community: Community,
         kg: KnowledgeGraph,
         child_reports: list | None = None,
+        claims: List[Claim] | None = None,
     ) -> str:
         try:
-            entities = [
-                entity.model_dump()
-                for entity_name in community.entities
-                if (entity := kg.get_entity(entity_name)) is not None
-            ]
             entity_names = set(community.entities)
-            relations = [
-                relation.model_dump()
-                for relation in kg.relations
-                if relation.source in entity_names and relation.target in entity_names
-            ]
+            degree = dict(kg.graph.degree())
+            entities = sorted(
+                [
+                    entity.model_dump()
+                    for entity_name in community.entities
+                    if (entity := kg.get_entity(entity_name)) is not None
+                ],
+                key=lambda entity: (-degree.get(entity["name"], 0), entity["name"]),
+            )
+            relations = sorted(
+                [
+                    relation.model_dump()
+                    for relation in kg.relations
+                    if relation.source in entity_names and relation.target in entity_names
+                ],
+                key=lambda relation: (
+                    -degree.get(relation["source"], 0)
+                    - degree.get(relation["target"], 0),
+                    -float(relation["weight"]),
+                    relation["source"],
+                    relation["target"],
+                ),
+            )
+            community_claims = sorted(
+                [
+                    claim.model_dump()
+                    for claim in (claims or [])
+                    if claim.subject_id in entity_names
+                    or (claim.object_id is not None and claim.object_id in entity_names)
+                ],
+                key=lambda claim: (claim["subject_id"], claim["id"]),
+            )
             prompt = create_community_summary_prompt(
                 community_id=community.id,
                 entities=entities,
                 relations=relations,
                 level=community.level,
                 child_reports=child_reports or [],
+                claims=community_claims,
             )
             summary = await llm_service.generate(
                 prompt=prompt,
@@ -55,6 +79,7 @@ class CommunitySummarizer:
         self,
         communities: List[Community],
         kg: KnowledgeGraph,
+        claims: List[Claim] | None = None,
     ) -> List[Community]:
         """Generate reports from the deepest level upward."""
         if not communities:
@@ -91,10 +116,12 @@ class CommunitySummarizer:
                     if child.summary
                 ]
                 updated = community.model_copy(deep=True)
+                kwargs = {"claims": claims} if claims else {}
                 updated.summary = await self.summarize_community(
                     updated,
                     kg,
                     child_reports=child_reports,
+                    **kwargs,
                 )
                 return updated
 
