@@ -22,6 +22,7 @@ from evaluation.hf_datasets import (
     DATASETS, download_cases, load_fixture, write_fixture,
 )
 from evaluation.hf_statistics import benchmark_comparison_matrix
+from evaluation.hf_robustness import expand_variants
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,6 +48,14 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--top-k", type=int, default=5)
     run.add_argument("--allow-mock-smoke", action="store_true")
     run.add_argument("--overwrite", action="store_true")
+    run.add_argument(
+        "--variants", nargs="+",
+        choices=["original", "shuffle", "distractor", "drop_support"],
+        default=None,
+        help="Optional deterministic document perturbation suite",
+    )
+    run.add_argument("--variant-seed", type=int, default=42)
+    run.add_argument("--noise-documents", type=int, default=2)
     run.add_argument("--output", type=Path, required=True)
 
     cmp = sub.add_parser("compare", help="Paired bootstrap and slice comparison")
@@ -70,6 +79,11 @@ async def main_async(args: argparse.Namespace) -> None:
         return
     if args.command == "run":
         cases = load_fixture(args.input)
+        if args.variants:
+            cases = expand_variants(
+                cases, args.variants, seed=args.variant_seed,
+                noise_documents=args.noise_documents,
+            )
         report = await run_benchmark(
             cases, args.conditions,
             allow_mock_smoke=args.allow_mock_smoke,
