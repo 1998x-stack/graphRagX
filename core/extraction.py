@@ -67,12 +67,9 @@ class EntityRelationExtractor:
                     log.info(f"Retrying extraction for chunk {chunk.id} (attempt {retry_count + 1})")
                     return await self.extract_from_chunk(chunk, retry_count + 1)
                 else:
-                    # 返回空结果
-                    return ExtractionResult(
-                        entities=[],
-                        relations=[],
-                        chunk_id=chunk.id,
-                        raw_response=response
+                    raise ValueError(
+                        f"Invalid extraction JSON for chunk {chunk.id} "
+                        f"after {self.max_retry + 1} attempts"
                     )
             
             # 验证格式
@@ -83,11 +80,13 @@ class EntityRelationExtractor:
                     log.info(f"Retrying extraction for chunk {chunk.id} (attempt {retry_count + 1})")
                     return await self.extract_from_chunk(chunk, retry_count + 1)
                 else:
-                    result_dict = {"entities": [], "relations": []}
+                    raise ValueError(
+                        f"Invalid extraction schema for chunk {chunk.id}: {error_msg}"
+                    )
             
             # 转换为 Pydantic 模型
             entities = []
-            for entity_dict in result_dict.get("entities", []):
+            for entity_dict in result_dict.get("entities", [])[: self.max_entities]:
                 try:
                     entity = Entity(
                         name=entity_dict["name"],
@@ -100,7 +99,7 @@ class EntityRelationExtractor:
                     log.warning(f"Failed to parse entity: {entity_dict}, error: {e}")
             
             relations = []
-            for relation_dict in result_dict.get("relations", []):
+            for relation_dict in result_dict.get("relations", [])[: self.max_relations]:
                 try:
                     relation = Relation(
                         source=relation_dict["source"],
@@ -134,13 +133,8 @@ class EntityRelationExtractor:
                 log.info(f"Retrying extraction for chunk {chunk.id} (attempt {retry_count + 1})")
                 return await self.extract_from_chunk(chunk, retry_count + 1)
             else:
-                # 返回空结果
-                return ExtractionResult(
-                    entities=[],
-                    relations=[],
-                    chunk_id=chunk.id,
-                    raw_response=""
-                )
+                # Never persist a superficially successful but silently incomplete index.
+                raise
     
     async def extract_from_chunks(
         self,
