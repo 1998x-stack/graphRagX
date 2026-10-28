@@ -18,12 +18,13 @@
 | 3.1.6 | Shuffle all community reports, map with helpfulness score, reduce | `workflows/query_workflow.py` | **Improved**: global coverage is default, stable shuffle, budget-fair per-report packing, existing parallel map/reduce; per-report token truncation remains a quality tradeoff |
 | 3.2 | Persona -> task -> global question generation | Future `evaluation/question_generation.py` | **Not implemented**: questions must be curated externally |
 | 3.3 | Blind pairwise judge, repeats, 4 criteria, tie handling | `evaluation/paper_judge.py`, `scripts/paper_evaluate.py` | **Implemented evaluation mechanism**, not paper replication; model judge calibration, uncertainty estimation and factuality checks still required |
-| 4.1 | C0/C1/C2/C3 vs text-map-reduce (TS) vs semantic search (SS) on matched data | `scripts/evaluate.py`, Global, Basic | **Partial**: Global/Basic available; explicit TS and six-condition experiment orchestration not implemented |
+| 4.1 | C0/C1/C2/C3 vs text-map-reduce (TS) vs semantic search (SS) on matched data | `scripts/evaluate.py`, Global, Basic, Text Summary | **Partial**: Global cut levels / TS / SS query modes available; dedicated six-condition experiment orchestration and corpus/model parity not implemented |
 | 4.2 | Claim-based comprehensiveness and diversity analysis | `core/claims.py` | **Not implemented** for answer-level Claimify-style analysis; index-time covariates are not the same thing |
 
 The four modes in the repository serve different tasks:
 - **Basic** = standard top-k text-unit embedding retrieval, closest to the paper's SS baseline.
 - **Global** = community-based query-focused map/reduce, the central paper method.
+- **Text Summary** (`text_summary`) = shuffled source-text map/reduce; the paper's TS control arm (subject to explicit budget limits).
 - **Local** = entity/neighbor/source exploration; not the paper's core global experiment.
 - **DRIFT** = later hybrid iterative search, also not one of the original six comparison conditions.
 
@@ -43,6 +44,7 @@ The four modes in the repository serve different tasks:
 - Reports are sorted and then deterministically shuffled using a SHA-256-derived per-question seed. This reproduces *the shuffle design*, not the paper's random draws.
 - A tokenizer-aware allocation distributes the index-level report budget fairly. Every report retains at least the configured minimum token allowance, or the query fails explicitly.
 - `GLOBAL_MAX_REPORTS` protects against unexpectedly expensive corpus-wide queries; exceeding it is an error, not a partial answer presented as complete.
+- `TS_MAX_TEXT_UNITS` and `TS_MAX_DATA_TOKENS` provide the same explicit all-source coverage controls for the paper's text-summary control arm.
 - Metadata includes `community_cut_size`, `community_reports_included`, and `community_report_coverage`.
 - `GLOBAL_SELECTION_MODE=relevance` preserves the existing retrieval-first behavior for lower-cost operation and DRIFT primer retrieval.
 
@@ -115,7 +117,7 @@ LLM_PROVIDER=openai python -m scripts.paper_evaluate \
 
 ### Stage C: Original paper evaluation and ablations
 
-1. Reproduce six conditions **C0 / C1 / C2 / C3 / TS / SS**, not merely Global vs Basic.
+1. Orchestrate six conditions **C0 / C1 / C2 / C3 / TS / SS** using the newly implemented TS control and level-projected Global cuts, ensuring matched prompts, model budgets, frozen corpora, and official scoring.
 2. Generate persona/task/question sets using the 3.2 method and manually audit global vs local question leakage.
 3. Run independent answer generation and blinded comparison for comprehensiveness, diversity, empowerment and directness.
 4. Use repeated balanced A/B order, per-question aggregated scores and confidence intervals with a question-level cluster bootstrap.
