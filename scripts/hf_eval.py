@@ -38,6 +38,10 @@ def parse_args() -> argparse.Namespace:
     dl.add_argument("--revision", type=str, default=None)
     dl.add_argument("--split", type=str, default=None)
     dl.add_argument("--max-source-documents", type=int, default=50)
+    dl.add_argument(
+        "--accept-multi-news-terms", action="store_true",
+        help="Acknowledge the Multi-News research/educational-use agreement",
+    )
     dl.add_argument("--output", type=Path, required=True)
 
     run = sub.add_parser("run", help="Index once and run paired query modes")
@@ -73,6 +77,7 @@ async def main_async(args: argparse.Namespace) -> None:
             dataset=args.dataset, count=args.count,
             seed=args.seed, revision=args.revision,
             split=args.split, max_source_documents=args.max_source_documents,
+            accept_multi_news_terms=args.accept_multi_news_terms,
         )
         write_fixture(cases, metadata, args.output)
         print(f"Saved {len(cases)} pinned benchmark cases to {args.output}")
