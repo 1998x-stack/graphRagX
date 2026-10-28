@@ -112,6 +112,7 @@ async def run_dataset(cases: list[EvaluationCase]) -> dict:
             results.append(await run_case(case, mode))
     return {
         "summary": aggregate_results(results),
+        "questions": {case.id: case.query for case in cases},
         "results": [item.model_dump() for item in results],
     }
 
