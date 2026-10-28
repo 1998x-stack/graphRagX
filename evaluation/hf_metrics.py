@@ -127,6 +127,17 @@ def _mean_valid(rows: list[dict], key: str) -> float | None:
     return mean(values) if values else None
 
 
+def _percentile_95(values: list[float]) -> float | None:
+    valid = sorted(
+        value for value in values
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool) and math.isfinite(value)
+    )
+    if not valid:
+        return None
+    return valid[math.ceil(0.95 * len(valid)) - 1]
+
+
 def aggregate_slices(records: list[dict]) -> dict[str, dict[str, dict]]:
     """Build every metric by mode, dataset, difficulty and hop count.
 
@@ -158,6 +169,9 @@ def aggregate_slices(records: list[dict]) -> dict[str, dict[str, dict]]:
             result[group_name][label] = {
                 "count": len(rows),
                 "success_rate": mean(float(bool(row.get("success"))) for row in rows),
+                "p95_latency_ms": _percentile_95(
+                    [row.get("latency_ms") for row in rows]
+                ),
                 **{key: _mean_valid(rows, key) for key in metrics},
             }
     return result
