@@ -126,6 +126,72 @@ extracted source-linked claims.
 
 **The repository has not reproduced the paper's published benchmark scores.**
 
+## Hugging Face multidimensional evaluation (V2.5 research branch)
+
+This branch adds a **real-data evaluation harness**, not fabricated benchmark
+scores. It supports version-pinned streaming datasets, one index per question,
+multi-mode comparisons, source-evidence mapping, graph quality diagnostics,
+robustness experiments and paired bootstrap confidence intervals.
+
+Supported datasets: **HotpotQA** (annotated multi-hop QA), **MuSiQue**
+(multi-hop decomposition), **QASPER** (scientific-paper QA), and **Multi-News**
+(multi-document summaries). Multi-News is subject to *noncommercial
+research/education-only terms* and requires an explicit acknowledgment.
+RAGBench is reserved for future judge calibration; its existing labels
+must not be applied to freshly generated answers.
+
+```bash
+pip install -r requirements.txt -r requirements-eval.txt
+
+# Download an immutable, SHA-256-manifested validation sample.
+python -m scripts.hf_eval download \
+  --dataset hotpotqa --count 20 --seed 42 \
+  --output data/hf/hotpotqa-val.jsonl
+
+# Smoke test only: mock/hash outputs are NOT scientific scores.
+python -m scripts.hf_eval run \
+  --input data/hf/hotpotqa-val.jsonl \
+  --conditions basic local global drift text_summary \
+  --allow-mock-smoke \
+  --output outputs/evaluation/hf-smoke.json
+
+# Configure real LLM + embedding providers before quality comparisons.
+python -m scripts.hf_eval run \
+  --input data/hf/hotpotqa-val.jsonl \
+  --conditions basic local global drift text_summary \
+  --output outputs/evaluation/hf-real.json
+
+python -m scripts.hf_eval compare \
+  --input outputs/evaluation/hf-real.json \
+  --candidate global --baseline basic --dataset hotpotqa \
+  --output outputs/evaluation/hf-paired.json
+```
+
+Metrics include EM/F1, ROUGE-L, annotated source recall/precision/MRR/nDCG,
+community report coverage, graph integrity/source-link coverage, failure rate,
+index/query latency (including P95), and dataset/difficulty/hop-count/variant
+slices. Missing gold labels are `null`, not invented scores.
+
+For reproducible perturbations use
+`--variants original shuffle distractor drop_support`.
+Removing annotated gold supports does **not** establish that a question becomes
+unanswerable; answer correctness is intentionally left unscored.
+
+Create a readable report from any stored benchmark JSON:
+
+```bash
+python -m scripts.hf_report \
+  --input outputs/evaluation/hf-real.json \
+  --output-dir outputs/evaluation/hf-report
+```
+
+Use `--plots` with optional matplotlib installed to render per-dataset
+quality figures; `summary.md` and `per_question.csv` are always generated.
+
+Read [HF Evaluation Protocol](docs/HF_EVALUATION_PROTOCOL.md) for dataset
+licenses, implementation constraints, experiment budgets, the phased study,
+and next implementation gaps.
+
 ## V2.3 Graph Quality & Retrieval Quality
 
 V2.3 adds quality stages before community detection:

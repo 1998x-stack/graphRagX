@@ -10,4 +10,7 @@ __pycache__/
 htmlcov/
 outputs/
 logs/
+# Downloaded HF datasets, local benchmark manifests and caches
+data/hf/
+.hf_cache/
 .DS_Store
