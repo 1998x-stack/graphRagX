@@ -1,0 +1,4 @@
+# Optional evaluation dependencies; avoid forcing large Hub libraries into
+# the API/runtime installation. The dataset commit is pinned at download time.
+datasets>=3.1,<5
+huggingface-hub>=0.29,<2
