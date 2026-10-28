@@ -131,8 +131,20 @@ async def run_benchmark(
             recorded = graph.metadata.get("source_metadata", {})
             if recorded.get("hf_case_id") != case.id or recorded.get("hf_revision") != case.revision:
                 raise ValueError(f"Existing index {index_id} is not this dataset snapshot")
-            # Reuse is safe only with identical content and parameters.
-            hashes = graph.metadata.get("input_document_sha256", {})
+            # Reuse is safe only with identical content and model parameters.
+            metadata = graph.metadata
+            if (
+                metadata.get("llm_provider") != settings.LLM_PROVIDER
+                or metadata.get("llm_model") != settings.LLM_MODEL
+                or metadata.get("embedding_provider") != settings.EMBEDDING_PROVIDER
+                or metadata.get("embedding_model") != settings.EMBEDDING_MODEL
+                or metadata.get("community_algorithm") != settings.COMMUNITY_ALGORITHM
+                or metadata.get("chunking", {}).get("unit") != settings.CHUNK_UNIT
+                or metadata.get("chunking", {}).get("size") != settings.CHUNK_SIZE
+                or metadata.get("chunking", {}).get("overlap") != settings.CHUNK_OVERLAP
+            ):
+                raise ValueError("Existing index model/algorithm/chunking configuration differs")
+            hashes = metadata.get("input_document_sha256", {})
             for i, doc in enumerate(documents):
                 digest = hashlib.sha256(doc.encode("utf-8")).hexdigest()
                 if hashes.get(f"{index_id}_doc_{i}") != digest:
@@ -213,10 +225,14 @@ async def run_benchmark(
                 "community_cut_size": context.get("community_cut_size"),
                 "community_reports_included": context.get("community_reports_included"),
                 "drift_actions": context.get("drift", {}).get("actions_executed"),
-                **answer_metrics(answer, case.reference_answers, case.task_type)
-                  if success else {
-                    "exact_match": None, "answer_token_f1": None, "rouge_l_f1": None
-                },
+                **(
+                    answer_metrics(answer, case.reference_answers, case.task_type)
+                    if success else {
+                        "exact_match": None,
+                        "answer_token_f1": None,
+                        "rouge_l_f1": None,
+                    }
+                ),
                 **evidence,
             }
             records.append(row)
