@@ -177,6 +177,17 @@ For reproducible perturbations use
 Removing annotated gold supports does **not** establish that a question becomes
 unanswerable; answer correctness is intentionally left unscored.
 
+Create a readable report from any stored benchmark JSON:
+
+```bash
+python -m scripts.hf_report \
+  --input outputs/evaluation/hf-real.json \
+  --output-dir outputs/evaluation/hf-report
+```
+
+Use `--plots` with optional matplotlib installed to render per-dataset
+quality figures; `summary.md` and `per_question.csv` are always generated.
+
 Read [HF Evaluation Protocol](docs/HF_EVALUATION_PROTOCOL.md) for dataset
 licenses, implementation constraints, experiment budgets, the phased study,
 and next implementation gaps.
