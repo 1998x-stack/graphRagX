@@ -181,3 +181,39 @@ def test_paired_bootstrap_is_reproducible_and_rejects_unpaired():
             {"results": records[:2]}, candidate="global", baseline="basic",
             metric="answer_token_f1", iterations=200
         )
+
+def test_multi_news_rawfiles_restore_newlines_and_reject_truncation(tmp_path: Path):
+    from evaluation.hf_datasets import multi_news_rows
+
+    src = tmp_path / "val.src.cleaned"
+    tgt = tmp_path / "val.tgt"
+    src.write_text("FirstNEWLINE_CHARline.|||||Second article.\\n", encoding="utf-8")
+    tgt.write_text("Summary one.\\n", encoding="utf-8")
+    parsed = list(multi_news_rows(src, tgt))
+    assert len(parsed) == 1
+    assert parsed[0]["document"] == "First\\nline.|||||Second article."
+    tgt.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="line-count mismatch"):
+        list(multi_news_rows(src, tgt))
+
+
+def test_multi_news_download_requires_license_acknowledgement(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from evaluation.hf_datasets import download_cases
+
+    class FakeApi:
+        def dataset_info(self, **kwargs):
+            return SimpleNamespace(sha=REV)
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        SimpleNamespace(
+            HfApi=FakeApi,
+            hf_hub_download=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("should not download without consent")
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="non-commercial research"):
+        download_cases("multi_news", count=1)
