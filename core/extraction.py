@@ -28,114 +28,80 @@ class EntityRelationExtractor:
         log.info("EntityRelationExtractor initialized")
     
     async def extract_from_chunk(
-        self,
-        chunk: TextChunk,
-        retry_count: int = 0
+        self, chunk: TextChunk, retry_count: int = 0
     ) -> ExtractionResult:
+        """Extract and validate a chunk; never disguise LLM failure as no facts.
+
+        A genuinely empty, correctly structured extraction is valid. Transport,
+        JSON, schema and Pydantic failures are retried iteratively and surfaced.
         """
-        从单个文本块提取实体和关系
-        
-        Args:
-            chunk: 文本块
-            retry_count: 当前重试次数
-            
-        Returns:
-            提取结果
-        """
-        try:
-            # 构建提示词
-            prompt = create_extraction_prompt(
-                text=chunk.text,
-                max_entities=self.max_entities,
-                max_relations=self.max_relations
-            )
-            
-            # 调用 LLM
-            log.info(f"Extracting from chunk: {chunk.id}")
-            response = await llm_service.generate(
-                prompt=prompt,
-                task="entity_extraction",
-                save_response=True
-            )
-            
-            # 提取 JSON
-            result_dict = extract_json(response)
-            
-            if result_dict is None:
-                log.error(f"Failed to extract JSON from LLM response for chunk {chunk.id}")
-                if retry_count < self.max_retry:
-                    log.info(f"Retrying extraction for chunk {chunk.id} (attempt {retry_count + 1})")
-                    return await self.extract_from_chunk(chunk, retry_count + 1)
-                else:
-                    raise ValueError(
-                        f"Invalid extraction JSON for chunk {chunk.id} "
-                        f"after {self.max_retry + 1} attempts"
+        prompt = create_extraction_prompt(
+            text=chunk.text,
+            max_entities=self.max_entities,
+            max_relations=self.max_relations,
+        )
+        for attempt in range(retry_count, self.max_retry + 1):
+            try:
+                response = await llm_service.generate(
+                    prompt=prompt,
+                    task="entity_extraction",
+                    save_response=True,
+                )
+                payload = extract_json(response)
+                if not isinstance(payload, dict):
+                    raise ValueError("No valid JSON object in extraction response")
+                valid, error_message = validate_extraction_result(payload)
+                if not valid:
+                    raise ValueError(f"Invalid entity/relation structure: {error_message}")
+                if (
+                    len(payload["entities"]) > self.max_entities
+                    or len(payload["relations"]) > self.max_relations
+                ):
+                    raise ValueError("Extraction exceeded configured entity/relation limits")
+
+                entities = [
+                    Entity(
+                        name=item["name"],
+                        type=item["type"],
+                        description=item["description"],
+                        source_chunk_ids=[chunk.id],
                     )
-            
-            # 验证格式
-            is_valid, error_msg = validate_extraction_result(result_dict)
-            if not is_valid:
-                log.error(f"Invalid extraction result for chunk {chunk.id}: {error_msg}")
-                if retry_count < self.max_retry:
-                    log.info(f"Retrying extraction for chunk {chunk.id} (attempt {retry_count + 1})")
-                    return await self.extract_from_chunk(chunk, retry_count + 1)
-                else:
-                    raise ValueError(
-                        f"Invalid extraction schema for chunk {chunk.id}: {error_msg}"
-                    )
-            
-            # 转换为 Pydantic 模型
-            entities = []
-            for entity_dict in result_dict.get("entities", [])[: self.max_entities]:
-                try:
-                    entity = Entity(
-                        name=entity_dict["name"],
-                        type=entity_dict["type"],
-                        description=entity_dict["description"],
-                        source_chunk_ids=[chunk.id]
-                    )
-                    entities.append(entity)
-                except Exception as e:
-                    log.warning(f"Failed to parse entity: {entity_dict}, error: {e}")
-            
-            relations = []
-            for relation_dict in result_dict.get("relations", [])[: self.max_relations]:
-                try:
-                    relation = Relation(
-                        source=relation_dict["source"],
-                        target=relation_dict["target"],
-                        relation_type=relation_dict["relation_type"],
-                        description=relation_dict["description"],
+                    for item in payload["entities"]
+                ]
+                relations = [
+                    Relation(
+                        source=item["source"],
+                        target=item["target"],
+                        relation_type=item["relation_type"],
+                        description=item["description"],
                         weight=1.0,
-                        source_chunk_ids=[chunk.id]
+                        source_chunk_ids=[chunk.id],
                     )
-                    relations.append(relation)
-                except Exception as e:
-                    log.warning(f"Failed to parse relation: {relation_dict}, error: {e}")
-            
-            log.info(
-                f"Extracted from chunk {chunk.id}: "
-                f"{len(entities)} entities, {len(relations)} relations"
-            )
-            
-            return ExtractionResult(
-                entities=entities,
-                relations=relations,
-                chunk_id=chunk.id,
-                raw_response=response
-            )
-            
-        except Exception as e:
-            log_exception(e, f"extract_from_chunk({chunk.id})")
-            
-            # 重试
-            if retry_count < self.max_retry:
-                log.info(f"Retrying extraction for chunk {chunk.id} (attempt {retry_count + 1})")
-                return await self.extract_from_chunk(chunk, retry_count + 1)
-            else:
-                # Never persist a superficially successful but silently incomplete index.
-                raise
-    
+                    for item in payload["relations"]
+                ]
+                log.info(
+                    "Extracted {} entities and {} relations from chunk {}",
+                    len(entities), len(relations), chunk.id,
+                )
+                return ExtractionResult(
+                    entities=entities,
+                    relations=relations,
+                    chunk_id=chunk.id,
+                    raw_response=response,
+                )
+            except Exception as exc:
+                log_exception(exc, f"extract_from_chunk({chunk.id}) attempt={attempt + 1}")
+                if attempt >= self.max_retry:
+                    raise RuntimeError(
+                        f"Extraction failed for chunk {chunk.id} after "
+                        f"{self.max_retry + 1} attempts"
+                    ) from exc
+                log.warning(
+                    "Retrying extraction for chunk {} (next attempt {})",
+                    chunk.id, attempt + 2,
+                )
+        raise RuntimeError("Unexpected extraction retry state")
+
     async def extract_from_chunks(
         self,
         chunks: List[TextChunk]
