@@ -73,6 +73,12 @@ class Settings(BaseSettings):
 
     RETRIEVAL_NEIGHBOR_DEPTH: int = 1
     GLOBAL_TOP_K: int = 24
+    # Coverage mode evaluates every community in a complete hierarchy cut.
+    # Relevance mode preserves the older top-k retrieval behavior.
+    GLOBAL_SELECTION_MODE: Literal["coverage", "relevance"] = "coverage"
+    GLOBAL_MAX_REPORTS: int = 256
+    GLOBAL_MIN_REPORT_TOKENS: int = 16
+    GLOBAL_SHUFFLE_SEED: int = 42
     GLOBAL_COMMUNITY_LEVEL: int = 1
     GLOBAL_MAX_DATA_TOKENS: int = 8000
     GLOBAL_MAP_BATCH_TOKENS: int = 2000
@@ -136,6 +142,8 @@ class Settings(BaseSettings):
             "COMMUNITY_MAX_CLUSTER_SIZE",
             "DESCRIPTION_SUMMARY_MAX_MENTIONS",
             "MAX_CLAIMS_PER_CHUNK",
+            "GLOBAL_MAX_REPORTS",
+            "GLOBAL_MIN_REPORT_TOKENS",
             "GLOBAL_MAX_DATA_TOKENS",
             "GLOBAL_MAP_BATCH_TOKENS",
             "GLOBAL_REDUCE_DATA_TOKENS",
