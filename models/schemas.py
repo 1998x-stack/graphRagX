@@ -155,6 +155,7 @@ class QueryResponse(BaseModel):
     status: Literal["success", "failed"]
     answer: str
     sources: List[Dict[str, Any]] = Field(default_factory=list)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
     mode: QueryMode
     processing_time: float
     error: Optional[str] = None
