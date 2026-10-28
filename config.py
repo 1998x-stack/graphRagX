@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     GLOBAL_MAX_REPORTS: int = 256
     GLOBAL_MIN_REPORT_TOKENS: int = 16
     GLOBAL_SHUFFLE_SEED: int = 42
+    # Paper TS condition: map/reduce on source text rather than graph reports.
+    TS_MAX_TEXT_UNITS: int = 256
+    TS_MAX_DATA_TOKENS: int = 8000
     GLOBAL_COMMUNITY_LEVEL: int = 1
     GLOBAL_MAX_DATA_TOKENS: int = 8000
     GLOBAL_MAP_BATCH_TOKENS: int = 2000
@@ -142,6 +145,8 @@ class Settings(BaseSettings):
             "COMMUNITY_MAX_CLUSTER_SIZE",
             "DESCRIPTION_SUMMARY_MAX_MENTIONS",
             "MAX_CLAIMS_PER_CHUNK",
+            "TS_MAX_TEXT_UNITS",
+            "TS_MAX_DATA_TOKENS",
             "GLOBAL_MAX_REPORTS",
             "GLOBAL_MIN_REPORT_TOKENS",
             "GLOBAL_MAX_DATA_TOKENS",
