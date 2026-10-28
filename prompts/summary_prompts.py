@@ -9,6 +9,7 @@ def create_community_summary_prompt(
     relations: list,
     level: int = 0,
     child_reports: list | None = None,
+    claims: list | None = None,
 ) -> str:
     entity_lines = [
         f"- {item.get('name', 'Unknown')} ({item.get('type', 'Unknown')}): {item.get('description', '')}"
@@ -17,6 +18,14 @@ def create_community_summary_prompt(
     relation_lines = [
         f"- {item.get('source')} --[{item.get('relation_type', 'RELATED_TO')}]--> {item.get('target')}: {item.get('description', '')}"
         for item in relations[:40]
+    ]
+    claim_lines = [
+        (
+            f"- [{item.get('id')}] status={item.get('status')} "
+            f"{item.get('subject_id')} -> {item.get('object_id')}: "
+            f"{item.get('description', '')} [text_unit={item.get('text_unit_id')}]"
+        )
+        for item in (claims or [])[:40]
     ]
     child_lines = [
         f"- [{item.get('id')}] {item.get('summary', '')}"
@@ -36,7 +45,10 @@ Entities:
 {chr(10).join(entity_lines) or '- none'}
 
 Relationships:
-{chr(10).join(relation_lines) or '- none'}{child_section}
+{chr(10).join(relation_lines) or '- none'}
+
+Claims and covariates:
+{chr(10).join(claim_lines) or '- none'}{child_section}
 
 Write the community report."""
 
