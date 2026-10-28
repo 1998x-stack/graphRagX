@@ -2,12 +2,14 @@
 
 graphRagX is a compact GraphRAG research and engineering baseline built with FastAPI, LangGraph, NetworkX, tokenizer-aware context budgeting, and pluggable LLM/embedding/community backends.
 
-V2.3 adds graph-quality augmentation and keeps four query modes:
+The paper-alignment branch extends V2.3 with a fifth query mode and
+full-coverage Global Search for corpus-level questions:
 
 - Local Search
 - Global Search
 - DRIFT Search
 - Basic vector RAG
+- Text Summary (TS): Map-Reduce directly over source text chunks (paper control arm)
 
 ## Architecture
 
@@ -36,7 +38,11 @@ Local:
 query -> entity seeds -> graph expansion -> source evidence -> answer
 
 Global:
-query -> community reports -> map batches -> rated evidence -> reduce
+query -> complete hierarchy cut -> balanced report coverage
+      -> shuffled map batches -> rated evidence -> reduce
+
+Text Summary (TS):
+query -> shuffled original text units -> map batches -> rated evidence -> reduce
 
 DRIFT:
 query -> community primer -> ranked follow-ups
@@ -46,6 +52,53 @@ query -> community primer -> ranked follow-ups
 Basic:
 query -> text-unit vectors -> answer
 ~~~
+
+## Research alignment: arXiv 2404.16130
+
+The branch addresses an important global-search problem: an ordinary top-k report
+search does not represent the entire indexed corpus. The paper-oriented default is
+`GLOBAL_SELECTION_MODE=coverage`, which maps **all** reports in the requested
+complete community cut (subject to explicit resource limits), with deterministic
+shuffle and token-aware budget allocation. No community is silently omitted.
+
+```env
+GLOBAL_SELECTION_MODE=coverage
+GLOBAL_MAX_REPORTS=256
+GLOBAL_MIN_REPORT_TOKENS=16
+GLOBAL_MAX_DATA_TOKENS=8000
+GLOBAL_SHUFFLE_SEED=42
+TS_MAX_TEXT_UNITS=256
+TS_MAX_DATA_TOKENS=8000
+```
+
+For the older, cheaper query-ranked behavior use
+`GLOBAL_SELECTION_MODE=relevance`; in that mode `top_k` limits reports.
+A query with too many reports or insufficient coverage budget fails explicitly.
+The JSON query API returns `diagnostics` with selected report counts and coverage.
+
+The new `text_summary` query mode provides the paper's TS control arm:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/query \
+  -H 'Content-Type: application/json' \
+  -d '{"index_id":"demo","query":"What themes recur?","mode":"text_summary"}'
+```
+
+Paper-style *blind pairwise* evaluation is separate from deterministic QA.
+After preparing an evaluation JSONL file and a saved index:
+
+```bash
+python -m scripts.evaluate --dataset evaluation/sample.jsonl \
+  --output outputs/evaluation/answers.json
+LLM_PROVIDER=openai python -m scripts.paper_evaluate \
+  --input outputs/evaluation/answers.json \
+  --output outputs/evaluation/pairwise.json --repeats 3
+```
+
+Use a real evaluator, not the mock model, for pairwise results.
+See [Paper Fidelity and Acceptance](docs/PAPER_2404_16130_ALIGNMENT.md)
+for the paper-by-paper coverage table, unimplemented features, and acceptance plan.
+**The repository has not reproduced the paper's published benchmark scores.**
 
 ## V2.3 Graph Quality & Retrieval Quality
 
@@ -221,6 +274,7 @@ CI validates Python 3.11, 3.12, and 3.13. A separate job installs python-igraph 
 - docs/ARCHITECTURE_V2_2.md
 - docs/ARCHITECTURE_V2_3.md
 - docs/ROADMAP.md
+- docs/PAPER_2404_16130_ALIGNMENT.md
 
 ## References
 
