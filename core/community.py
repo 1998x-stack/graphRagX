@@ -99,6 +99,13 @@ class CommunityDetector:
 
         normalized = [set(group) for group in groups if group]
         normalized.sort(key=lambda group: tuple(sorted(group)))
+        covered: set[str] = set()
+        for group in normalized:
+            if covered.intersection(group):
+                raise ValueError("Community partition contains overlapping groups")
+            covered.update(group)
+        if covered != set(graph.nodes()):
+            raise ValueError("Community partition does not cover every graph node")
         return normalized
 
     def detect_communities(
@@ -120,8 +127,11 @@ class CommunityDetector:
             parent_id: str | None,
             level: int,
             resolution: float,
+            prepared_groups: List[Set[str]] | None = None,
         ) -> None:
-            groups = self._partition_graph(subgraph, resolution, selected)
+            groups = prepared_groups if prepared_groups is not None else self._partition_graph(
+                subgraph, resolution, selected
+            )
             for group in groups:
                 community_id = f"L{level}_C{counters[level]}"
                 counters[level] += 1
@@ -156,6 +166,7 @@ class CommunityDetector:
                     community_id,
                     level + 1,
                     resolution * self.resolution_multiplier,
+                    prepared_groups=child_groups,
                 )
 
         add_partition(graph, None, 0, self.resolution)
@@ -166,6 +177,44 @@ class CommunityDetector:
             selected,
         )
         return communities
+
+    @staticmethod
+    def project_level(
+        communities: List[Community], requested_level: int
+    ) -> List[Community]:
+        """Select a complete hierarchy cut, retaining unsplit ancestors.
+
+        A pure exact-level filter loses nodes whenever a branch terminates early.
+        This projection matches the C0-C3 community semantics in Edge et al.
+        """
+        if requested_level < 0:
+            raise ValueError("requested_level must be non-negative")
+        by_id = {community.id: community for community in communities}
+        children: Dict[str, List[Community]] = defaultdict(list)
+        roots: List[Community] = []
+        for community in communities:
+            if community.parent_id and community.parent_id in by_id:
+                children[community.parent_id].append(community)
+            else:
+                roots.append(community)
+
+        projected: List[Community] = []
+        pending = list(reversed(sorted(roots, key=lambda item: item.id)))
+        visited: set[str] = set()
+        while pending:
+            parent = pending.pop()
+            if parent.id in visited:
+                raise ValueError("Community hierarchy contains a cycle or duplicate")
+            visited.add(parent.id)
+            eligible_children = sorted(
+                (child for child in children[parent.id] if child.level <= requested_level),
+                key=lambda item: item.id,
+            )
+            if eligible_children:
+                pending.extend(reversed(eligible_children))
+            else:
+                projected.append(parent)
+        return sorted(projected, key=lambda item: (item.level, item.id))
 
     @staticmethod
     def available_levels(communities: List[Community]) -> List[int]:
