@@ -1,6 +1,7 @@
 """LangGraph indexing workflow for building a portable GraphRAG index."""
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Dict, List, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -294,6 +295,25 @@ class IndexingWorkflow:
             graph_data.metadata.update(
                 {
                     "schema_version": settings.INDEX_SCHEMA_VERSION,
+                    "llm_provider": settings.LLM_PROVIDER,
+                    "llm_model": settings.LLM_MODEL,
+                    "chunking": {
+                        "unit": settings.CHUNK_UNIT,
+                        "size": settings.CHUNK_SIZE,
+                        "overlap": settings.CHUNK_OVERLAP,
+                        "tokenizer_model": settings.LLM_MODEL if settings.CHUNK_UNIT == "tokens" else None,
+                    },
+                    "input_document_sha256": {
+                        f"{state['index_id']}_doc_{index}": hashlib.sha256(
+                            document.encode("utf-8")
+                        ).hexdigest()
+                        for index, document in enumerate(state["documents"])
+                    },
+                    "extraction": {
+                        "max_retries": settings.MAX_RETRY,
+                        "max_entities_per_chunk": settings.MAX_ENTITIES_PER_CHUNK,
+                        "max_relations_per_chunk": settings.MAX_RELATIONS_PER_CHUNK,
+                    },
                     "embedding_provider": settings.EMBEDDING_PROVIDER,
                     "embedding_model": embedding_service.model,
                     "embedding_dimension": embedding_service.dimension,
