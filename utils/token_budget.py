@@ -52,6 +52,48 @@ class TokenBudget:
             break
         return selected
 
+    def coverage_select(
+        self,
+        segments: Sequence[Segment],
+        max_tokens: int,
+        min_tokens_per_segment: int = 16,
+    ) -> List[Segment]:
+        """Allocate the total budget fairly without dropping a community.
+
+        Fails explicitly when even the minimum evidence per report cannot fit.
+        The allocation is deterministic and uses the actual tokenizer.
+        """
+        if max_tokens <= 0 or min_tokens_per_segment <= 0:
+            raise ValueError("Token budgets must be positive")
+        if not segments:
+            return []
+        lengths = [self.count(content) for _, content in segments]
+        assigned = [min(length, min_tokens_per_segment) for length in lengths]
+        remaining = max_tokens - sum(assigned)
+        if remaining < 0:
+            raise ValueError(
+                "Global coverage budget cannot retain all community reports; "
+                "increase GLOBAL_MAX_DATA_TOKENS or use relevance selection"
+            )
+        active = {index for index, length in enumerate(lengths) if length > assigned[index]}
+        while remaining > 0 and active:
+            grant = max(1, remaining // len(active))
+            progressed = 0
+            for index in sorted(active):
+                additional = min(grant, lengths[index] - assigned[index], remaining)
+                assigned[index] += additional
+                remaining -= additional
+                progressed += additional
+                if remaining == 0:
+                    break
+            if not progressed:
+                break
+            active = {index for index in active if lengths[index] > assigned[index]}
+        return [
+            (segment_id, self.truncate(content, assigned[index]))
+            for index, (segment_id, content) in enumerate(segments)
+        ]
+
     def batches(self, segments: Sequence[Segment], max_tokens: int) -> List[List[Segment]]:
         """Create ordered batches that each stay within the token budget."""
         batches: List[List[Segment]] = []
