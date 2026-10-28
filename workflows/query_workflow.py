@@ -1,6 +1,9 @@
 """Unified query workflow for local, global, basic, and DRIFT retrieval."""
 from __future__ import annotations
 
+import hashlib
+import math
+import random
 from typing import Any, Dict, List, TypedDict
 
 import numpy as np
@@ -76,6 +79,7 @@ class QueryWorkflow:
         workflow.add_node("load_graph", self.load_graph)
         workflow.add_node("local_search", self.local_search)
         workflow.add_node("global_search", self.global_search)
+        workflow.add_node("text_summary_search", self.text_summary_search)
         workflow.add_node("basic_search", self.basic_search)
         workflow.add_node("drift_search", self.drift_search)
         workflow.add_node("generate_local_answer", self.generate_local_answer)
@@ -90,6 +94,7 @@ class QueryWorkflow:
             {
                 "local": "local_search",
                 "global": "global_search",
+                "text_summary": "text_summary_search",
                 "basic": "basic_search",
                 "drift": "drift_search",
                 "end": END,
@@ -98,6 +103,7 @@ class QueryWorkflow:
         for retrieval, generator in (
             ("local_search", "generate_local_answer"),
             ("global_search", "generate_global_answer"),
+            ("text_summary_search", "generate_global_answer"),
             ("basic_search", "generate_basic_answer"),
             ("drift_search", "generate_drift_answer"),
         ):
@@ -297,58 +303,100 @@ class QueryWorkflow:
         top_k: int,
         community_level: int,
         max_tokens: int,
+        selection_mode: str = "relevance",
     ) -> Dict[str, Any]:
-        communities = [
-            community
-            for community in graph_data.communities
-            if community.summary
-        ]
+        """Retrieve a complete hierarchy cut or a query-ranked subset.
+
+        The global coverage path follows the paper's corpus-wide map stage;
+        DRIFT retains relevance-ranked primer retrieval.
+        """
         chosen_level = community_detector.choose_level(
-            communities,
-            community_level,
+            graph_data.communities, community_level
         )
-        level_communities = [
-            community
-            for community in communities
-            if community.level == chosen_level
-        ]
-        ids = [community.id for community in level_communities]
-        limit = min(top_k, settings.MAX_QUERY_TOP_K, len(ids))
-        ranked = await self._rank_named_vectors(
-            query,
-            ids,
-            graph_data.community_embeddings,
-            [community.summary or "" for community in level_communities],
-            limit,
-            use_stored=self._stored_embeddings_compatible(graph_data),
+        cut = community_detector.project_level(
+            graph_data.communities, chosen_level
         )
-        by_id = {
-            community.id: community
-            for community in level_communities
-        }
-        budgeted = token_budget.select(
-            [
-                (community_id, by_id[community_id].summary or "")
-                for community_id, _ in ranked
-            ],
-            max_tokens,
-        )
-        budgeted_text = dict(budgeted)
-        reports = [
-            {
-                "id": community_id,
-                "summary": budgeted_text[community_id],
-                "size": by_id[community_id].size,
-                "level": by_id[community_id].level,
-                "parent_id": by_id[community_id].parent_id,
-                "relevance": score,
-            }
-            for community_id, score in ranked
-            if community_id in budgeted_text
-        ]
+        by_id = {community.id: community for community in cut}
+
+        if selection_mode == "coverage":
+            missing = [community.id for community in cut if not community.summary]
+            if missing:
+                raise ValueError(
+                    "Cannot run full-coverage Global Search with missing "
+                    f"community reports: {missing[:5]}"
+                )
+            if len(cut) > settings.GLOBAL_MAX_REPORTS:
+                raise ValueError(
+                    f"Community cut contains {len(cut)} reports, exceeding "
+                    f"GLOBAL_MAX_REPORTS={settings.GLOBAL_MAX_REPORTS}. "
+                    "Use relevance selection or raise the configured limit."
+                )
+            shuffled = sorted(cut, key=lambda community: community.id)
+            digest = hashlib.sha256(
+                f"{settings.GLOBAL_SHUFFLE_SEED}:{query}".encode("utf-8")
+            ).digest()
+            random.Random(int.from_bytes(digest[:8], "big")).shuffle(shuffled)
+            packed = token_budget.coverage_select(
+                [(item.id, item.summary or "") for item in shuffled],
+                max_tokens=max_tokens,
+                min_tokens_per_segment=settings.GLOBAL_MIN_REPORT_TOKENS,
+            )
+            reports = [
+                {
+                    "id": community_id,
+                    "summary": clipped,
+                    "size": by_id[community_id].size,
+                    "level": by_id[community_id].level,
+                    "parent_id": by_id[community_id].parent_id,
+                    "relevance": None,
+                }
+                for community_id, clipped in packed
+            ]
+        elif selection_mode == "relevance":
+            candidates = sorted(
+                [community for community in cut if community.summary],
+                key=lambda community: community.id,
+            )
+            names = [community.id for community in candidates]
+            ranked = await self._rank_named_vectors(
+                query,
+                names,
+                graph_data.community_embeddings,
+                [community.summary or "" for community in candidates],
+                min(top_k, settings.MAX_QUERY_TOP_K, len(names)),
+                use_stored=self._stored_embeddings_compatible(graph_data),
+            )
+            packed = dict(
+                token_budget.select(
+                    [(community_id, by_id[community_id].summary or "")
+                     for community_id, _ in ranked],
+                    max_tokens,
+                )
+            )
+            reports = [
+                {
+                    "id": community_id,
+                    "summary": packed[community_id],
+                    "size": by_id[community_id].size,
+                    "level": by_id[community_id].level,
+                    "parent_id": by_id[community_id].parent_id,
+                    "relevance": score,
+                }
+                for community_id, score in ranked
+                if community_id in packed
+            ]
+        else:
+            raise ValueError(f"Unsupported community selection mode: {selection_mode}")
+
         return {
             "community_summaries": reports,
             "community_level": chosen_level,
+            "community_selection_mode": selection_mode,
+            "community_cut_size": len(cut),
+            "community_reports_included": len(reports),
+            "community_report_coverage": (
+                len(reports) / len(cut) if cut else 1.0
+            ),
         }
 
     async def local_search(self, state: QueryWorkflowState) -> dict:
@@ -378,6 +426,7 @@ class QueryWorkflow:
                 top_k=min(state.get("top_k", 5), settings.GLOBAL_TOP_K),
                 community_level=requested_level,
                 max_tokens=settings.GLOBAL_MAX_DATA_TOKENS,
+                selection_mode=settings.GLOBAL_SELECTION_MODE,
             )
             return {
                 "relevant_context": context,
@@ -386,39 +435,91 @@ class QueryWorkflow:
         except Exception as exc:
             return self._failure(exc, "global_search")
 
+    async def text_summary_search(self, state: QueryWorkflowState) -> dict:
+        """Paper TS baseline: the same map/reduce over source text units."""
+        try:
+            chunks = sorted(
+                state["graph_data"].text_chunks, key=lambda item: item.id
+            )
+            if len(chunks) > settings.TS_MAX_TEXT_UNITS:
+                raise ValueError(
+                    f"TS requires {len(chunks)} text units, exceeding "
+                    f"TS_MAX_TEXT_UNITS={settings.TS_MAX_TEXT_UNITS}"
+                )
+            digest = hashlib.sha256(
+                f"TS:{settings.GLOBAL_SHUFFLE_SEED}:{state['query']}".encode("utf-8")
+            ).digest()
+            random.Random(int.from_bytes(digest[:8], "big")).shuffle(chunks)
+            packed = token_budget.coverage_select(
+                [(chunk.id, chunk.text) for chunk in chunks],
+                settings.TS_MAX_DATA_TOKENS,
+                min_tokens_per_segment=settings.GLOBAL_MIN_REPORT_TOKENS,
+            )
+            by_id = {chunk.id: chunk for chunk in chunks}
+            reports = [
+                {
+                    "id": chunk_id,
+                    "summary": text,
+                    "doc_id": by_id[chunk_id].doc_id,
+                    "level": None,
+                    "parent_id": None,
+                    "size": 1,
+                    "relevance": None,
+                }
+                for chunk_id, text in packed
+            ]
+            return {
+                "relevant_context": {
+                    "community_summaries": reports,
+                    "community_selection_mode": "text_summary_coverage",
+                    "community_cut_size": len(chunks),
+                    "community_reports_included": len(reports),
+                    "community_report_coverage": 1.0,
+                },
+                "current_step": "context_retrieved",
+            }
+        except Exception as exc:
+            return self._failure(exc, "text_summary_search")
+
     @staticmethod
     def _parse_global_map_points(
         raw_response: str,
         source_reports: List[str],
     ) -> List[Dict[str, Any]]:
+        """Require structured rated evidence and validate report provenance."""
         data = extract_json(raw_response)
+        if not isinstance(data, dict) or not isinstance(data.get("points"), list):
+            raise ValueError("Global map model response must contain a JSON points list")
+        allowed = set(source_reports)
         points: List[Dict[str, Any]] = []
-        if isinstance(data, dict) and isinstance(data.get("points"), list):
-            for point in data["points"]:
-                if not isinstance(point, dict):
+        for item in data["points"]:
+            if not isinstance(item, dict):
+                continue
+            description = str(item.get("description", "")).strip()
+            if not description:
+                continue
+            try:
+                score = float(item["score"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not math.isfinite(score):
+                continue
+            requested = item.get("source_reports")
+            if isinstance(requested, list) and requested:
+                # Refuse to surface fabricated community/text-unit citations.
+                sources = list(dict.fromkeys(
+                    ref for ref in requested if isinstance(ref, str) and ref in allowed
+                ))
+                if not sources:
                     continue
-                description = str(point.get("description", "")).strip()
-                if not description:
-                    continue
-                try:
-                    score = float(point.get("score", 0))
-                except (TypeError, ValueError):
-                    score = 0.0
-                points.append(
-                    {
-                        "description": description,
-                        "score": max(0.0, min(100.0, score)),
-                        "source_reports": source_reports,
-                    }
-                )
-        if not points and raw_response.strip():
-            points.append(
-                {
-                    "description": raw_response.strip(),
-                    "score": 1.0,
-                    "source_reports": source_reports,
-                }
-            )
+            else:
+                # Legacy model prompts did not return per-point provenance.
+                sources = list(dict.fromkeys(source_reports))
+            points.append({
+                "description": description,
+                "score": max(0.0, min(100.0, score)),
+                "source_reports": sources,
+            })
         return points
 
     @staticmethod

@@ -59,7 +59,29 @@ Implemented in V2.3:
 - Basic/Local/Global/DRIFT evaluation harness
 - deterministic source-recall and answer-term metrics
 
-## P1D — next fidelity layer
+## P1D — original paper fidelity improvements (in progress)
+
+Implemented on the paper-alignment branch:
+- projected community cuts keep unsplit ancestors and reject invalid partitions
+- default complete-report Global coverage with deterministic shuffled map batches
+- tokenizer-aware fair context allocation and explicit resource-limit failures
+- iterative fail-closed extraction, preventing false-success empty knowledge graphs
+- text-unit Map/Reduce TS control arm
+- six-condition C0/C1/C2/C3/TS/SS experiment harness
+- optional token-based 600/100 chunking with source character/token offsets
+- optional blind repeated pairwise judging over four paper criteria
+- regression tests for coverage, extraction validity, TS, and pairwise evaluation
+- detailed Section 3/4 paper-to-code parity matrix
+
+Still outstanding (see `docs/PAPER_2404_16130_ALIGNMENT.md`):
+- tokenizer/model/input-hash manifests, and evidence-grounded citations
+- citation-grounded report schema, prompt budgets and full claim verification (basic claim inclusion and graph-degree importance sorting are implemented)
+- persona-based benchmark question generation
+- validated six-condition study with strict source, model and prompt-budget parity
+- manifest completeness for tokenizer, prompt templates, provider versions and per-stage costs (source SHA-256/model/chunking information implemented)
+- statistical confidence intervals, answer-level claim evaluation, source faithfulness
+
+## P1E — next fidelity layer
 
 - learned/fuzzy entity resolution with merge confidence
 - dynamic community-level selection

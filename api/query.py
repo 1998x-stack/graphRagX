@@ -80,11 +80,12 @@ async def query_graph(request: QueryRequest):
                 }
                 for item in context.get("claims", [])
             )
-        elif request.mode == "global":
+        elif request.mode in {"global", "text_summary"}:
             sources = [
                 {
-                    "type": "community",
+                    "type": "text_unit" if request.mode == "text_summary" else "community",
                     "id": item.get("id"),
+                    "doc_id": item.get("doc_id"),
                     "level": item.get("level"),
                     "parent_id": item.get("parent_id"),
                     "relevance": item.get("relevance"),
@@ -92,6 +93,15 @@ async def query_graph(request: QueryRequest):
                 }
                 for item in context.get("community_summaries", [])
             ]
+            sources.extend(
+                {
+                    "type": "map_point",
+                    "description": item.get("description", "")[:400],
+                    "score": item.get("score"),
+                    "source_reports": item.get("source_reports", []),
+                }
+                for item in context.get("map_points", [])
+            )
         elif request.mode == "drift":
             sources = [
                 {
@@ -131,6 +141,17 @@ async def query_graph(request: QueryRequest):
             status="success",
             answer=final_state.get("answer", ""),
             sources=sources,
+            diagnostics={
+                key: context[key]
+                for key in (
+                    "community_selection_mode",
+                    "community_cut_size",
+                    "community_reports_included",
+                    "community_report_coverage",
+                    "community_level",
+                )
+                if key in context
+            },
             mode=request.mode,
             processing_time=perf_counter() - started,
         )

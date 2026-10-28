@@ -1,11 +1,11 @@
 """Validated domain and API schemas."""
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 INDEX_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
-QueryMode = Literal["local", "global", "basic", "drift"]
+QueryMode = Literal["local", "global", "basic", "drift", "text_summary"]
 
 
 class Entity(BaseModel):
@@ -64,6 +64,28 @@ class TextChunk(BaseModel):
     doc_id: str
     chunk_index: int
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    start_char: Optional[int] = Field(default=None, ge=0)
+    end_char: Optional[int] = Field(default=None, ge=0)
+    start_token: Optional[int] = Field(default=None, ge=0)
+    end_token: Optional[int] = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_source_spans(self) -> "TextChunk":
+        for start, end, label in (
+            (self.start_char, self.end_char, "character"),
+            (self.start_token, self.end_token, "token"),
+        ):
+            if (start is None) != (end is None):
+                raise ValueError(f"{label} span needs both start and end")
+            if start is not None and end is not None and end <= start:
+                raise ValueError(f"{label} span must have positive length")
+        if (
+            self.start_char is not None
+            and self.end_char is not None
+            and self.end_char - self.start_char != len(self.text)
+        ):
+            raise ValueError("character span must match chunk text length")
+        return self
 
 
 class ExtractionResult(BaseModel):
@@ -155,6 +177,7 @@ class QueryResponse(BaseModel):
     status: Literal["success", "failed"]
     answer: str
     sources: List[Dict[str, Any]] = Field(default_factory=list)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
     mode: QueryMode
     processing_time: float
     error: Optional[str] = None

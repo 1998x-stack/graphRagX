@@ -50,7 +50,7 @@ def extract_source_ids(mode: QueryMode, context: dict[str, Any]) -> list[str]:
             for item in context.get("claims", [])
             if item.get("id")
         )
-    if mode in {"global", "drift"}:
+    if mode in {"global", "drift", "text_summary"}:
         source_ids.extend(
             item.get("id")
             for item in context.get("community_summaries", [])
@@ -112,6 +112,7 @@ async def run_dataset(cases: list[EvaluationCase]) -> dict:
             results.append(await run_case(case, mode))
     return {
         "summary": aggregate_results(results),
+        "questions": {case.id: case.query for case in cases},
         "results": [item.model_dump() for item in results],
     }
 

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     MAX_RETRY: int = 3
     RETRY_DELAY: float = 1.0
 
+    CHUNK_UNIT: Literal["characters", "tokens"] = "characters"
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 160
     MAX_ENTITIES_PER_CHUNK: int = 20
@@ -73,6 +74,15 @@ class Settings(BaseSettings):
 
     RETRIEVAL_NEIGHBOR_DEPTH: int = 1
     GLOBAL_TOP_K: int = 24
+    # Coverage mode evaluates every community in a complete hierarchy cut.
+    # Relevance mode preserves the older top-k retrieval behavior.
+    GLOBAL_SELECTION_MODE: Literal["coverage", "relevance"] = "coverage"
+    GLOBAL_MAX_REPORTS: int = 256
+    GLOBAL_MIN_REPORT_TOKENS: int = 16
+    GLOBAL_SHUFFLE_SEED: int = 42
+    # Paper TS condition: map/reduce on source text rather than graph reports.
+    TS_MAX_TEXT_UNITS: int = 256
+    TS_MAX_DATA_TOKENS: int = 8000
     GLOBAL_COMMUNITY_LEVEL: int = 1
     GLOBAL_MAX_DATA_TOKENS: int = 8000
     GLOBAL_MAP_BATCH_TOKENS: int = 2000
@@ -106,7 +116,7 @@ class Settings(BaseSettings):
     LOG_FILE: Path = Path("./logs/graphrag.log")
     LOG_ROTATION: str = "100 MB"
     LOG_RETENTION: str = "10 days"
-    INDEX_SCHEMA_VERSION: str = "2.3"
+    INDEX_SCHEMA_VERSION: str = "2.4"
 
     @property
     def LLM_LOGS_DIR(self) -> Path:
@@ -136,6 +146,10 @@ class Settings(BaseSettings):
             "COMMUNITY_MAX_CLUSTER_SIZE",
             "DESCRIPTION_SUMMARY_MAX_MENTIONS",
             "MAX_CLAIMS_PER_CHUNK",
+            "TS_MAX_TEXT_UNITS",
+            "TS_MAX_DATA_TOKENS",
+            "GLOBAL_MAX_REPORTS",
+            "GLOBAL_MIN_REPORT_TOKENS",
             "GLOBAL_MAX_DATA_TOKENS",
             "GLOBAL_MAP_BATCH_TOKENS",
             "GLOBAL_REDUCE_DATA_TOKENS",
