@@ -2,7 +2,7 @@
 
 graphRagX is a compact GraphRAG research and engineering baseline built with FastAPI, LangGraph, NetworkX, tokenizer-aware context budgeting, and pluggable LLM/embedding/community backends.
 
-The paper-alignment branch extends V2.3 with a fifth query mode and
+GraphRagX V2.4 extends the V2.3 quality baseline with a fifth query mode and
 full-coverage Global Search for corpus-level questions:
 
 - Local Search
@@ -119,6 +119,11 @@ LLM_PROVIDER=openai python -m scripts.paper_evaluate \
 Use a real evaluator, not the mock model, for pairwise results.
 See [Paper Fidelity and Acceptance](docs/PAPER_2404_16130_ALIGNMENT.md)
 for the paper-by-paper coverage table, unimplemented features, and acceptance plan.
+Indexed artifacts additionally persist SHA-256 source document hashes and
+chunk/model/extraction parameters for research provenance. Community reports
+now prioritize high-degree entities/relationships and include optionally
+extracted source-linked claims.
+
 **The repository has not reproduced the paper's published benchmark scores.**
 
 ## V2.3 Graph Quality & Retrieval Quality
