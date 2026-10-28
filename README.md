@@ -71,6 +71,27 @@ TS_MAX_TEXT_UNITS=256
 TS_MAX_DATA_TOKENS=8000
 ```
 
+Token-based paper-style text units are supported without changing the
+default character-based behavior. Set `CHUNK_UNIT=tokens`,
+`CHUNK_SIZE=600`, `CHUNK_OVERLAP=100`. Chunk records retain
+character and token source offsets. See `.env.paper.example` for an
+experimental configuration; indexes built using different chunk units
+must be treated as different experimental conditions.
+
+The six-condition harness runs C0/C1/C2/C3 (Global at projected levels
+0-3), TS (source-text map/reduce) and SS (basic semantic search):
+
+```bash
+python -m scripts.paper_conditions \
+  --dataset evaluation/sample.jsonl \
+  --output outputs/evaluation/paper_conditions.json --max-cases 5
+```
+
+The resulting report can be judged using
+`python -m scripts.paper_evaluate --input outputs/evaluation/paper_conditions.json --mode-a C2 --mode-b SS`
+with a real evaluator configured. The sample JSONL is a format fixture,
+not a validated benchmark.
+
 For the older, cheaper query-ranked behavior use
 `GLOBAL_SELECTION_MODE=relevance`; in that mode `top_k` limits reports.
 A query with too many reports or insufficient coverage budget fails explicitly.
