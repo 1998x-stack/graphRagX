@@ -64,6 +64,15 @@ class TextChunk(BaseModel):
     doc_id: str
     chunk_index: int
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    start_char: Optional[int] = Field(default=None, ge=0)
+    end_char: Optional[int] = Field(default=None, ge=0)
+    start_token: Optional[int] = Field(default=None, ge=0)
+    end_token: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("end_char")
+    @classmethod
+    def validate_end_char(cls, value: Optional[int]) -> Optional[int]:
+        return value
 
 
 class ExtractionResult(BaseModel):
