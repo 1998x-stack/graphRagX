@@ -82,7 +82,7 @@ def _collect_pairs(
         if not row.get("success") or not str(row.get("answer", "")).strip():
             continue
         case_id = str(row.get("case_id", ""))
-        mode = str(row.get("mode", ""))
+        mode = str(row.get("condition") or row.get("mode", ""))
         if mode in {mode_a, mode_b} and case_id:
             if mode in cases[case_id]:
                 raise ValueError(f"Duplicate result for {case_id}/{mode}")
