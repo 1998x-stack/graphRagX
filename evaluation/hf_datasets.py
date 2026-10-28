@@ -303,7 +303,7 @@ def multi_news_rows(source: Path, target: Path) -> Iterable[dict]:
                     f"Multi-News source/target line-count mismatch at {line_number}"
                 )
             yield {
-                "document": source_line.strip().replace("NEWLINE_CHAR", "\\n"),
+                "document": source_line.strip().replace("NEWLINE_CHAR", "\n"),
                 "summary": summary_line.strip(),
             }
 
