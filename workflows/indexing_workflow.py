@@ -233,6 +233,7 @@ class IndexingWorkflow:
             communities = await community_summarizer.summarize_communities(
                 kg.communities,
                 kg,
+                claims=state.get("claims", []),
             )
             kg.set_communities(communities)
             return {
