@@ -75,9 +75,10 @@ Implemented on the paper-alignment branch:
 
 Still outstanding (see `docs/PAPER_2404_16130_ALIGNMENT.md`):
 - tokenizer/model/input-hash manifests, and evidence-grounded citations
-- claim-inclusive and importance-ranked community report context
+- citation-grounded report schema, prompt budgets and full claim verification (basic claim inclusion and graph-degree importance sorting are implemented)
 - persona-based benchmark question generation
 - validated six-condition study with strict source, model and prompt-budget parity
+- manifest completeness for tokenizer, prompt templates, provider versions and per-stage costs (source SHA-256/model/chunking information implemented)
 - statistical confidence intervals, answer-level claim evaluation, source faithfulness
 
 ## P1E — next fidelity layer
