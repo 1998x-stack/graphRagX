@@ -146,6 +146,8 @@ def aggregate_slices(records: list[dict]) -> dict[str, dict[str, dict]]:
             "difficulty": str(row.get("difficulty") or "unknown"),
             "hop_count": str(row.get("hop_count")
                              if row.get("hop_count") is not None else "unknown"),
+            "question_type": str(row.get("question_type") or "unknown"),
+            "robustness_variant": str(row.get("robustness_variant") or "original"),
         }
         for group_name, label in tags.items():
             groups.setdefault(group_name, {}).setdefault(label, []).append(row)
