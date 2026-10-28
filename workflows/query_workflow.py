@@ -78,6 +78,7 @@ class QueryWorkflow:
         workflow.add_node("load_graph", self.load_graph)
         workflow.add_node("local_search", self.local_search)
         workflow.add_node("global_search", self.global_search)
+        workflow.add_node("text_summary_search", self.text_summary_search)
         workflow.add_node("basic_search", self.basic_search)
         workflow.add_node("drift_search", self.drift_search)
         workflow.add_node("generate_local_answer", self.generate_local_answer)
@@ -92,6 +93,7 @@ class QueryWorkflow:
             {
                 "local": "local_search",
                 "global": "global_search",
+                "text_summary": "text_summary_search",
                 "basic": "basic_search",
                 "drift": "drift_search",
                 "end": END,
@@ -100,6 +102,7 @@ class QueryWorkflow:
         for retrieval, generator in (
             ("local_search", "generate_local_answer"),
             ("global_search", "generate_global_answer"),
+            ("text_summary_search", "generate_global_answer"),
             ("basic_search", "generate_basic_answer"),
             ("drift_search", "generate_drift_answer"),
         ):
@@ -430,6 +433,52 @@ class QueryWorkflow:
             }
         except Exception as exc:
             return self._failure(exc, "global_search")
+
+    async def text_summary_search(self, state: QueryWorkflowState) -> dict:
+        """Paper TS baseline: the same map/reduce over source text units."""
+        try:
+            chunks = sorted(
+                state["graph_data"].text_chunks, key=lambda item: item.id
+            )
+            if len(chunks) > settings.TS_MAX_TEXT_UNITS:
+                raise ValueError(
+                    f"TS requires {len(chunks)} text units, exceeding "
+                    f"TS_MAX_TEXT_UNITS={settings.TS_MAX_TEXT_UNITS}"
+                )
+            digest = hashlib.sha256(
+                f"TS:{settings.GLOBAL_SHUFFLE_SEED}:{state['query']}".encode("utf-8")
+            ).digest()
+            random.Random(int.from_bytes(digest[:8], "big")).shuffle(chunks)
+            packed = token_budget.coverage_select(
+                [(chunk.id, chunk.text) for chunk in chunks],
+                settings.TS_MAX_DATA_TOKENS,
+                min_tokens_per_segment=settings.GLOBAL_MIN_REPORT_TOKENS,
+            )
+            by_id = {chunk.id: chunk for chunk in chunks}
+            reports = [
+                {
+                    "id": chunk_id,
+                    "summary": text,
+                    "doc_id": by_id[chunk_id].doc_id,
+                    "level": None,
+                    "parent_id": None,
+                    "size": 1,
+                    "relevance": None,
+                }
+                for chunk_id, text in packed
+            ]
+            return {
+                "relevant_context": {
+                    "community_summaries": reports,
+                    "community_selection_mode": "text_summary_coverage",
+                    "community_cut_size": len(chunks),
+                    "community_reports_included": len(reports),
+                    "community_report_coverage": 1.0,
+                },
+                "current_step": "context_retrieved",
+            }
+        except Exception as exc:
+            return self._failure(exc, "text_summary_search")
 
     @staticmethod
     def _parse_global_map_points(
