@@ -14,7 +14,7 @@
 | 3.1.2 | LLM entity and relation extraction, descriptions, strict validation | `core/extraction.py`, `prompts/extraction_prompts.py` | **Implemented baseline + stronger failure semantics**: bounded retry and fail-closed invalid responses; domain prompt tuning remains manual |
 | 3.1.3 | Aggregate repeated entity and relation mentions into weighted graph | `core/entity_resolution.py`, `models/graph.py`, `core/description_summarization.py` | **Partial**: normalized exact resolution and aggregation; alias ambiguity and extraction recall remain to be benchmarked |
 | 3.1.4 | Hierarchical Leiden communities, complete graph coverage at C0-C3 | `core/community.py` | **Implemented complete cut projection**; optional Leiden, but Louvain is default; backend equivalence not demonstrated |
-| 3.1.5 | Bottom-up community reports, node/edge/claim inclusion, importance ordering | `core/summarization.py`, `prompts/summary_prompts.py` | **Partial**: bottom-up reports exist; claim-aware report context and graph prominence packing still required |
+| 3.1.5 | Bottom-up community reports, node/edge/claim inclusion, importance ordering | `core/summarization.py`, `prompts/summary_prompts.py` | **Partial**: bottom-up reports, claim inputs and degree-ranked entity/relationship evidence implemented; report JSON schema, claim verification, prompt-token budget limits and exact source citation remain outstanding |
 | 3.1.6 | Shuffle all community reports, map with helpfulness score, reduce | `workflows/query_workflow.py` | **Improved**: global coverage is default, stable shuffle, budget-fair per-report packing, existing parallel map/reduce; per-report token truncation remains a quality tradeoff |
 | 3.2 | Persona -> task -> global question generation | Future `evaluation/question_generation.py` | **Not implemented**: questions must be curated externally |
 | 3.3 | Blind pairwise judge, repeats, 4 criteria, tie handling | `evaluation/paper_judge.py`, `scripts/paper_evaluate.py` | **Implemented evaluation mechanism**, not paper replication; model judge calibration, uncertainty estimation and factuality checks still required |
@@ -99,7 +99,7 @@ LLM_PROVIDER=openai python -m scripts.paper_evaluate \
 2. **Extract evidence grounding**: store exact text spans per entity, relation and claim; validate that source spans exist before output.
 3. **Entity fusion**: type-compatible aliases with merge audit/confidence and reversal; benchmark precision/recall against manually annotated corpora.
 4. **Leiden fidelity**: make Leiden a research preset, verify seed/version stability, modularity and coverage, and test disconnected components.
-5. **Community reports**: edge-degree-based prominence ordering, include claims, explicit source IDs; budget-aware child report substitution rather than unrestricted hard slicing.
+5. **Community reports**: degree-ranked entity/relationship context and claim inclusion now exist; add explicit source IDs on every report claim, bounded prompt packing, standardized rating fields, and budget-aware child report substitution rather than unrestricted slicing.
 6. **Index manifests**: record input content hashes, model/provider/version, tokenizer, prompts, algorithm parameters, date, schema version, embedding dimensions, and source-to-graph lineage.
 
 **Exit criteria:** a fixed corpus produces a deterministic schema-valid index with complete community cuts, preserved source coverage, model-call accounting, and an audit trail back to text spans.
@@ -141,6 +141,7 @@ LLM_PROVIDER=openai python -m scripts.paper_evaluate \
 ## 5. Honest limitations
 
 - No empirical claim is made about improving RAG answer quality until held-out tests are executed.
+- Index metadata now records source-document SHA-256, chunking, LLM and extraction parameters; verify it with actual corpus runs and extend it with tokenizer/library/prompt-version hashes.
 - Source-aware citation verification and true scientific replication remain outstanding.
 - The paper is about **global query-focused summarization**, not proof that graph retrieval universally beats vector search.
 - Real graph indexing and LLM pairwise judging can be expensive; run a small fixture before scaling.
