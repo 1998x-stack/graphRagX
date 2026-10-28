@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     LOG_FILE: Path = Path("./logs/graphrag.log")
     LOG_ROTATION: str = "100 MB"
     LOG_RETENTION: str = "10 days"
-    INDEX_SCHEMA_VERSION: str = "2.3"
+    INDEX_SCHEMA_VERSION: str = "2.4"
 
     @property
     def LLM_LOGS_DIR(self) -> Path:
