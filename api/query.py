@@ -93,6 +93,15 @@ async def query_graph(request: QueryRequest):
                 }
                 for item in context.get("community_summaries", [])
             ]
+            sources.extend(
+                {
+                    "type": "map_point",
+                    "description": item.get("description", "")[:400],
+                    "score": item.get("score"),
+                    "source_reports": item.get("source_reports", []),
+                }
+                for item in context.get("map_points", [])
+            )
         elif request.mode == "drift":
             sources = [
                 {
