@@ -67,15 +67,17 @@ Implemented on the paper-alignment branch:
 - tokenizer-aware fair context allocation and explicit resource-limit failures
 - iterative fail-closed extraction, preventing false-success empty knowledge graphs
 - text-unit Map/Reduce TS control arm
+- six-condition C0/C1/C2/C3/TS/SS experiment harness
+- optional token-based 600/100 chunking with source character/token offsets
 - optional blind repeated pairwise judging over four paper criteria
 - regression tests for coverage, extraction validity, TS, and pairwise evaluation
 - detailed Section 3/4 paper-to-code parity matrix
 
 Still outstanding (see `docs/PAPER_2404_16130_ALIGNMENT.md`):
-- token-based source chunking, source offsets, and evidence-grounded citations
+- tokenizer/model/input-hash manifests, and evidence-grounded citations
 - claim-inclusive and importance-ranked community report context
 - persona-based benchmark question generation
-- C0/C1/C2/C3/TS/SS six-condition orchestration with source- and model-budget parity
+- validated six-condition study with strict source, model and prompt-budget parity
 - statistical confidence intervals, answer-level claim evaluation, source faithfulness
 
 ## P1E — next fidelity layer
