@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
-import re
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
@@ -29,12 +29,12 @@ DATASETS = {
     "multi_news": {
         "repo": "alexfabbri/multi_news", "config": None,
         "split": "validation", "task": "multi_document_summary",
-        "license": "see_dataset_card",
+        "license": "noncommercial_research_education_only",
     },
     "qasper": {
         "repo": "allenai/qasper", "config": None,
         "split": "validation", "task": "paper_qa",
-        "license": "see_dataset_card",
+        "license": "cc-by-4.0",
     },
 }
 DatasetName = Literal["hotpotqa", "musique", "multi_news", "qasper"]
@@ -292,10 +292,27 @@ def deterministic_sample(
     return [entry[2] for entry in sorted(heap, key=lambda item: (-item[0], item[1]))]
 
 
+def multi_news_rows(source: Path, target: Path) -> Iterable[dict]:
+    """Read pinned official text files without executing legacy Hub scripts."""
+    with source.open(encoding="utf-8") as src, target.open(encoding="utf-8") as tgt:
+        for line_number, (source_line, summary_line) in enumerate(
+            zip_longest(src, tgt), start=1
+        ):
+            if source_line is None or summary_line is None:
+                raise ValueError(
+                    f"Multi-News source/target line-count mismatch at {line_number}"
+                )
+            yield {
+                "document": source_line.strip().replace("NEWLINE_CHAR", "\\n"),
+                "summary": summary_line.strip(),
+            }
+
+
 def download_cases(
     dataset: DatasetName, count: int = 20, seed: int = 42,
     revision: str | None = None, split: str | None = None,
     max_source_documents: int = 50,
+    accept_multi_news_terms: bool = False,
 ) -> tuple[list[BenchmarkCase], dict[str, Any]]:
     """Load a dataset streaming at an immutable HF commit SHA.
 
@@ -303,8 +320,7 @@ def download_cases(
     are network operations and are never run from unit tests.
     """
     try:
-        from datasets import load_dataset
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi, hf_hub_download
     except ImportError as exc:
         raise RuntimeError(
             "Install optional Hugging Face dependencies: "
@@ -318,9 +334,41 @@ def download_cases(
     if not resolved:
         raise RuntimeError(f"Unable to pin dataset revision for {repo}")
     split = split or spec["split"]
-    stream = load_dataset(
-        repo, spec["config"], split=split, streaming=True, revision=resolved
-    )
+    if dataset == "multi_news":
+        if not accept_multi_news_terms:
+            raise ValueError(
+                "Multi-News is restricted to non-commercial research and "
+                "education. Rerun with --accept-multi-news-terms after "
+                "reviewing its dataset usage agreement."
+            )
+        filenames = {
+            "train": ("train.src.cleaned", "train.tgt"),
+            "validation": ("val.src.cleaned", "val.tgt"),
+            "test": ("test.src.cleaned", "test.tgt"),
+        }
+        if split not in filenames:
+            raise ValueError(f"Unsupported Multi-News split: {split}")
+        src_name, tgt_name = filenames[split]
+        src_path = Path(hf_hub_download(
+            repo_id=repo, repo_type="dataset",
+            filename=f"data/{src_name}", revision=resolved,
+        ))
+        tgt_path = Path(hf_hub_download(
+            repo_id=repo, repo_type="dataset",
+            filename=f"data/{tgt_name}", revision=resolved,
+        ))
+        stream = multi_news_rows(src_path, tgt_path)
+    else:
+        try:
+            from datasets import load_dataset
+        except ImportError as exc:
+            raise RuntimeError(
+                "Install datasets: pip install -r requirements-eval.txt"
+            ) from exc
+        stream = load_dataset(
+            repo, spec["config"], split=split,
+            streaming=True, revision=resolved,
+        )
 
     def iter_cases() -> Iterable[BenchmarkCase]:
         seen: set[str] = set()
