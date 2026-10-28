@@ -187,11 +187,11 @@ def test_multi_news_rawfiles_restore_newlines_and_reject_truncation(tmp_path: Pa
 
     src = tmp_path / "val.src.cleaned"
     tgt = tmp_path / "val.tgt"
-    src.write_text("FirstNEWLINE_CHARline.|||||Second article.\\n", encoding="utf-8")
-    tgt.write_text("Summary one.\\n", encoding="utf-8")
+    src.write_text("FirstNEWLINE_CHARline.|||||Second article.\n", encoding="utf-8")
+    tgt.write_text("Summary one.\n", encoding="utf-8")
     parsed = list(multi_news_rows(src, tgt))
     assert len(parsed) == 1
-    assert parsed[0]["document"] == "First\\nline.|||||Second article."
+    assert parsed[0]["document"] == "First\nline.|||||Second article."
     tgt.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="line-count mismatch"):
         list(multi_news_rows(src, tgt))
