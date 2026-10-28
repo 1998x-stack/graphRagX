@@ -10,7 +10,7 @@
 
 | Paper section | Contract / target | Repository module | Fidelity status |
 |---|---|---|---|
-| 3.1.1 | Source document -> token-size overlapping text units | `core/chunking.py` | **Partial**: currently character-based, not equivalent to the paper's 600-token/100-token-overlap experiment |
+| 3.1.1 | Source document -> token-size overlapping text units | `core/chunking.py` | **Implemented optionally**: `CHUNK_UNIT=tokens`, source offsets and paper-style 600/100 preset; default characters mode remains for compatibility |
 | 3.1.2 | LLM entity and relation extraction, descriptions, strict validation | `core/extraction.py`, `prompts/extraction_prompts.py` | **Implemented baseline + stronger failure semantics**: bounded retry and fail-closed invalid responses; domain prompt tuning remains manual |
 | 3.1.3 | Aggregate repeated entity and relation mentions into weighted graph | `core/entity_resolution.py`, `models/graph.py`, `core/description_summarization.py` | **Partial**: normalized exact resolution and aggregation; alias ambiguity and extraction recall remain to be benchmarked |
 | 3.1.4 | Hierarchical Leiden communities, complete graph coverage at C0-C3 | `core/community.py` | **Implemented complete cut projection**; optional Leiden, but Louvain is default; backend equivalence not demonstrated |
@@ -18,7 +18,7 @@
 | 3.1.6 | Shuffle all community reports, map with helpfulness score, reduce | `workflows/query_workflow.py` | **Improved**: global coverage is default, stable shuffle, budget-fair per-report packing, existing parallel map/reduce; per-report token truncation remains a quality tradeoff |
 | 3.2 | Persona -> task -> global question generation | Future `evaluation/question_generation.py` | **Not implemented**: questions must be curated externally |
 | 3.3 | Blind pairwise judge, repeats, 4 criteria, tie handling | `evaluation/paper_judge.py`, `scripts/paper_evaluate.py` | **Implemented evaluation mechanism**, not paper replication; model judge calibration, uncertainty estimation and factuality checks still required |
-| 4.1 | C0/C1/C2/C3 vs text-map-reduce (TS) vs semantic search (SS) on matched data | `scripts/evaluate.py`, Global, Basic, Text Summary | **Partial**: Global cut levels / TS / SS query modes available; dedicated six-condition experiment orchestration and corpus/model parity not implemented |
+| 4.1 | C0/C1/C2/C3 vs text-map-reduce (TS) vs semantic search (SS) on matched data | `evaluation/paper_conditions.py`, `scripts/paper_conditions.py` | **Implemented six-arm orchestration**; corpus, model, prompts and budget parity still unverified; not a published-results replication |
 | 4.2 | Claim-based comprehensiveness and diversity analysis | `core/claims.py` | **Not implemented** for answer-level Claimify-style analysis; index-time covariates are not the same thing |
 
 The four modes in the repository serve different tasks:
@@ -78,15 +78,15 @@ curl -X POST http://localhost:8000/api/v1/query \
 To compare research questions consistently:
 
 ```bash
-python -m scripts.evaluate \
+python -m scripts.paper_conditions \
   --dataset evaluation/sample.jsonl \
-  --output outputs/evaluation/answers.json
+  --output outputs/evaluation/answers.json --max-cases 5
 
 # Only after configuring a real LLM evaluator:
 LLM_PROVIDER=openai python -m scripts.paper_evaluate \
   --input outputs/evaluation/answers.json \
   --output outputs/evaluation/pairwise.json \
-  --mode-a global --mode-b basic --repeats 3
+  --mode-a C2 --mode-b SS --repeats 3
 ```
 
 `evaluation/sample.jsonl` is a format/example fixture, **not** the paper's benchmark dataset. For meaningful results, supply a corpus-matched question set, same model and prompt budget per mode, deterministic index snapshot, relevant costs, and replicated judge prompts. The judge requires an actual model; offline mock scores are intentionally prohibited.
@@ -95,7 +95,7 @@ LLM_PROVIDER=openai python -m scripts.paper_evaluate \
 
 ### Stage A: Paper-faithful indexing (highest priority)
 
-1. **Token-based chunking**: introduce `CHUNK_UNIT=tokens`, preserve offsets and source IDs; reproducibility preset at 600 tokens / 100 overlap.
+1. **Token-aware source ingestion hardening**: optional `CHUNK_UNIT=tokens`, exact source offsets and 600/100 preset are implemented; next add source document hash lineage, sentence-aware boundary ablations and tokenizer-version manifests.
 2. **Extract evidence grounding**: store exact text spans per entity, relation and claim; validate that source spans exist before output.
 3. **Entity fusion**: type-compatible aliases with merge audit/confidence and reversal; benchmark precision/recall against manually annotated corpora.
 4. **Leiden fidelity**: make Leiden a research preset, verify seed/version stability, modularity and coverage, and test disconnected components.
@@ -117,7 +117,7 @@ LLM_PROVIDER=openai python -m scripts.paper_evaluate \
 
 ### Stage C: Original paper evaluation and ablations
 
-1. Orchestrate six conditions **C0 / C1 / C2 / C3 / TS / SS** using the newly implemented TS control and level-projected Global cuts, ensuring matched prompts, model budgets, frozen corpora, and official scoring.
+1. Validate the implemented six-condition **C0 / C1 / C2 / C3 / TS / SS** runner on a frozen corpus, ensuring matched prompts, model budgets, index provenance and scoring.
 2. Generate persona/task/question sets using the 3.2 method and manually audit global vs local question leakage.
 3. Run independent answer generation and blinded comparison for comprehensiveness, diversity, empowerment and directness.
 4. Use repeated balanced A/B order, per-question aggregated scores and confidence intervals with a question-level cluster bootstrap.
