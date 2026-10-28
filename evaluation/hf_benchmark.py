@@ -14,11 +14,63 @@ from typing import Any
 from config import settings
 from evaluation.hf_datasets import BenchmarkCase
 from evaluation.hf_metrics import aggregate_slices, answer_metrics, evidence_metrics
+from core.community import community_detector
+from models.graph import KnowledgeGraph
 from evaluation.paper_conditions import CONDITIONS
 from models.schemas import GraphData
 from services.storage_service import storage_service
 from workflows.indexing_workflow import indexing_workflow
 from workflows.query_workflow import query_workflow
+
+
+def graph_quality_snapshot(graph: GraphData | None) -> dict[str, Any]:
+    if graph is None:
+        return {}
+    all_chunk_ids = {chunk.id for chunk in graph.text_chunks}
+    evidence_ids = {
+        source
+        for entity in graph.entities.values()
+        for source in entity.source_chunk_ids
+    }
+    evidence_ids.update(
+        source
+        for relation in graph.relations
+        for source in relation.source_chunk_ids
+    )
+    evidence_ids.update(claim.text_unit_id for claim in graph.covariates)
+    kg = KnowledgeGraph.from_graph_data(graph)
+    hierarchy_cut = community_detector.project_level(graph.communities, 99)
+    seen: set[str] = set()
+    repeated: set[str] = set()
+    for community in hierarchy_cut:
+        for entity in community.entities:
+            if entity in seen:
+                repeated.add(entity)
+            seen.add(entity)
+    return {
+        "graph_components": kg.get_statistics()["connected_components"],
+        "graph_density": kg.get_statistics()["density"],
+        "num_claims": len(graph.covariates),
+        "num_communities_with_summary": sum(
+            bool(item.summary) for item in graph.communities
+        ),
+        "num_entities_with_source_ids": sum(
+            bool(item.source_chunk_ids) for item in graph.entities.values()
+        ),
+        "chunk_entity_or_relation_coverage": (
+            len(evidence_ids & all_chunk_ids) / len(all_chunk_ids)
+            if all_chunk_ids else None
+        ),
+        "community_cut_entity_coverage": (
+            len(seen & set(graph.entities)) / len(graph.entities)
+            if graph.entities else None
+        ),
+        "community_cut_duplicate_entities": len(repeated),
+        "unresolved_relation_endpoints": sum(
+            rel.source not in graph.entities or rel.target not in graph.entities
+            for rel in graph.relations
+        ),
+    }
 
 
 def index_id_for_case(case: BenchmarkCase) -> str:
@@ -178,6 +230,7 @@ async def run_benchmark(
             "num_entities": len(graph.entities) if graph else None,
             "num_relations": len(graph.relations) if graph else None,
             "num_communities": len(graph.communities) if graph else None,
+            "graph_quality": graph_quality_snapshot(graph),
         }
         index_records.append(stats)
         for condition in conditions:
