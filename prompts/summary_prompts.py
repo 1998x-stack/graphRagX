@@ -92,7 +92,7 @@ def create_global_map_prompt(query: str, community_reports: list) -> str:
         f"[{item.get('id')}] {item.get('summary', '')}"
         for item in community_reports
     ) or "No community reports available."
-    return f"""Evaluate the community reports for the user question. Extract only evidence relevant to the question. Return valid JSON with this exact shape:
+    return f"""Evaluate the supplied evidence reports or source passages for the user question. Extract only evidence relevant to the question. Return valid JSON with this exact shape:
 
 {{
   "points": [
@@ -105,7 +105,7 @@ def create_global_map_prompt(query: str, community_reports: list) -> str:
 
 Score each point from 0 to 100 by importance for answering the question. Do not use outside knowledge. Omit irrelevant points.
 
-Community reports:
+Evidence:
 {reports}
 
 Question: {query}
