@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     MAX_RETRY: int = 3
     RETRY_DELAY: float = 1.0
 
+    CHUNK_UNIT: Literal["characters", "tokens"] = "characters"
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 160
     MAX_ENTITIES_PER_CHUNK: int = 20
