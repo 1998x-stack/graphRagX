@@ -41,9 +41,9 @@ def build_markdown_report(report: dict) -> str:
         "",
         f"**Status:** {'OFFLINE SMOKE — NOT SCIENTIFIC PERFORMANCE DATA' if smoke else 'REAL MODEL RUN — SEE LIMITATIONS'}",
         "",
-        f"LLM: \`{settings.get('llm_provider', 'unknown')} / {settings.get('llm_model', 'unknown')}\`  ",
-        f"Embeddings: \`{settings.get('embedding_provider', 'unknown')} / {settings.get('embedding_model', 'unknown')}\`  ",
-        f"Chunking: \`{settings.get('chunk_unit', 'unknown')} / {settings.get('chunk_size', '?')} / {settings.get('chunk_overlap', '?')}\`",
+        f"LLM: `{settings.get('llm_provider', 'unknown')} / {settings.get('llm_model', 'unknown')}`  ",
+        f"Embeddings: `{settings.get('embedding_provider', 'unknown')} / {settings.get('embedding_model', 'unknown')}`  ",
+        f"Chunking: `{settings.get('chunk_unit', 'unknown')} / {settings.get('chunk_size', '?')} / {settings.get('chunk_overlap', '?')}`",
         "",
     ]
     for dataset, modes in sorted(groups.items()):
