@@ -81,6 +81,27 @@ Still outstanding (see `docs/PAPER_2404_16130_ALIGNMENT.md`):
 - manifest completeness for tokenizer, prompt templates, provider versions and per-stage costs (source SHA-256/model/chunking information implemented)
 - statistical confidence intervals, answer-level claim evaluation, source faithfulness
 
+## P1D2 — Hugging Face multidimensional evaluation (implemented on PR #5)
+
+- Version-pinned streaming HF adapters: HotpotQA, MuSiQue, Multi-News, QASPER
+- Stable document and gold evidence IDs, fixture SHA-256 manifests
+- Per-question frozen-index Basic/Local/Global/DRIFT/TS and C0-C3 runs
+- QA EM/token F1, summary ROUGE-L, document evidence P/R/MRR/nDCG
+- Graph density/connectivity/community coverage and source link diagnostics
+- Query latency average/P95, index time, failure rate, per-mode slices
+- Document reorder, synthetic distractors and source-removal stress variants
+- Paired question-level bootstrap effects/95% confidence intervals
+- Multi-News agreement guard and safe static-file ingestion
+- Tests + detailed `docs/HF_EVALUATION_PROTOCOL.md`
+
+Remaining before a scientific performance report:
+- Actual HF dataset downloads and real model runs; CI is offline only
+- Measured cost/tokens/throughput, factuality/hallucination verification
+- Annotated graph entity/relation gold data and citation faithfulness checks
+- End-to-end open-corpus retrieval with shared multi-question index
+- Human-reviewed global question set, multiple seeds and prompt/model parity
+- Paper-cluster bootstrap, Holm correction, judge calibration and plots
+
 ## P1E — next fidelity layer
 
 - learned/fuzzy entity resolution with merge confidence
